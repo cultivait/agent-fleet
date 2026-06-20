@@ -1,0 +1,44 @@
+{
+  "name": "agent-fleet",
+  "version": "1.8.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Cultivait LLC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cultivait/agent-fleet.git"
+  },
+  "homepage": "https://github.com/cultivait/agent-fleet#readme",
+  "bugs": {
+    "url": "https://github.com/cultivait/agent-fleet/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "mcp",
+    "claude",
+    "collaboration",
+    "task-board",
+    "multi-agent"
+  ],
+  "workspaces": [
+    "hub",
+    "mcp-server",
+    "subsystems/slack-bot"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "clean": "npm run clean --workspaces",
+    "start": "npm start --workspace=hub & HUB_PID=$!; sleep 1; if ! kill -0 $HUB_PID 2>/dev/null; then wait $HUB_PID; exit $?; fi; if [ -n \"${AGENT_FLEET_SLACK_BOT_TOKEN:-$WALKIE_TALKIE_SLACK_BOT_TOKEN}\" ]; then npm start --workspace=@agent-fleet/slack-bot & fi; wait",
+    "bundle": "node scripts/bundle.mjs",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "biome lint .",
+    "format": "biome format .",
+    "check": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.5",
+    "esbuild": "^0.25.0"
+  }
+}
