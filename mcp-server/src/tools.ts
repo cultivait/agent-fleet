@@ -106,9 +106,94 @@ let joinToken: string;
 let currentToken: string | null = null;
 let currentName: string | null = null;
 
+// ── T5: persist this session's hub identity so an MCP reconnect / restart can re-auth
+// WITHOUT a manual fleet_join. The per-session token otherwise lives only in this process's
+// memory (currentToken), so any MCP respawn wipes it → the next hub call 401s with no recovery.
+// We persist {token,name} keyed by the Claude session id, 0600 (it's a bearer token), and the
+// reauth callback replays the token as oldToken so the hub takes the clean-reconnect branch
+// instead of a takeover. Cleared on operator-kill and on sign-off so a killed/closed session
+// can't be silently resurrected from a stale file.
+const SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID;
+// T5 fix (#1 keying): the persisted-token FILE must survive a SESSION RESTART so a relaunched
+// fleet agent recovers its hub identity and replays the saved token as oldToken (→ hub
+// clean-reconnect branch → queue preserved by the hub-side gate) instead of re-registering as
+// a takeover, which sheds its pending queue — the message-loss this whole change targets.
+// CLAUDE_CODE_SESSION_ID is minted fresh on every (re)launch, so it stays correct for the hub
+// REGISTRATION below (owner_sid at the register() call MUST remain the real session id — the
+// rewake/msgcheck hooks resolve our callsign via /whoami?sid=<that id>) but it CANNOT key a
+// cross-restart file. The fleet callsign (AF_CALLSIGN, exported by the fleet launcher) is
+// identical across a launcher relaunch, so key the file on it; solo (non-fleet) sessions have
+// no callsign and fall back to the session id (a solo restart loses its token exactly as
+// before — no regression). NOTE: only a fleet-LAUNCHER relaunch (re-exports AF_CALLSIGN) is a
+// supported recovery path; a bare `claude --continue` carries neither AF_CALLSIGN nor the old
+// sid, so it stays unsupported by design. Exported for unit tests.
+export function persistKey(): string | undefined {
+  return process.env.AF_CALLSIGN || process.env.WT_CALLSIGN || SESSION_ID;
+}
+export function tokenFile(): string | null {
+  const key = persistKey();
+  // sanitize: callsigns may contain spaces (e.g. "REFEREE Field") and must be path-safe.
+  return key ? `/tmp/wt-token-${key.replace(/[^A-Za-z0-9._@-]/g, "_")}` : null;
+}
+function persistIdentity(): void {
+  const f = tokenFile();
+  if (!f || !currentToken || !currentName) return;
+  try {
+    fs.writeFileSync(f, JSON.stringify({ token: currentToken, name: currentName }), { mode: 0o600 });
+  } catch {
+    /* best-effort: persistence is an optimization, never block a join on it */
+  }
+}
+function loadPersistedIdentity(): void {
+  const f = tokenFile();
+  if (!f) return;
+  try {
+    const obj = JSON.parse(fs.readFileSync(f, "utf8")) as { token?: string; name?: string };
+    if (obj.token) currentToken = obj.token;
+    if (obj.name) currentName = obj.name;
+  } catch {
+    /* no/invalid file → first run or never joined; stay null */
+  }
+}
+function clearPersistedToken(): void {
+  const f = tokenFile();
+  if (f) {
+    try {
+      fs.rmSync(f, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+// Operator-kill / hard-Unauthorized: drop the identity AND its persisted file so no reauth
+// resurrects it. (Plain helper so the three kill branches stay one line each.)
+function forgetIdentity(): void {
+  currentToken = null;
+  currentName = null;
+  clearPersistedToken();
+}
+
 export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   client = new HubClient(hubUrl);
   joinToken = joinTok;
+  // T5: restore a token persisted by a previous incarnation of this MCP process, then arm
+  // transparent re-auth. On any 401 the hub no longer recognizes our token (reconnect lost it
+  // or the hub restarted): re-register with the saved oldToken so the hub takes the clean-
+  // reconnect branch, persist the fresh token, and let the failed call replay — no manual
+  // fleet_join, no churn. Returns null (give up) if we never joined or were operator-killed.
+  loadPersistedIdentity();
+  client.onUnauthorized = async () => {
+    if (!currentName) return null;
+    try {
+      const r = await client.register(currentName, joinToken, currentToken ?? undefined, SESSION_ID ?? undefined);
+      currentToken = r.token;
+      currentName = r.name;
+      persistIdentity();
+      return r.token;
+    } catch {
+      return null;
+    }
+  };
 
   const server = new McpServer({
     name: "agent-fleet",
@@ -117,6 +202,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
 
   // Alias-transition: register the canonical fleet_* tool plus a hidden deprecated
   // radio_* alias delegating to the SAME handler, for one transition version.
+  // See ~/.claude/docs/agent-fleet-rename-plan.md (Lane A).
   // schema/handler are typed `any`: server.tool is heavily overloaded and a
   // precise Parameters<> type resolves to the wrong (annotations) overload, so a
   // localized any keeps the 4-arg (name, description, schema, handler) form sound.
@@ -129,8 +215,14 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     handler: (args: any) => any,
   ) => {
     server.tool(fleetName, description, schema, handler);
-    const radioName = `radio_${fleetName.slice("fleet_".length)}`;
-    server.tool(radioName, `(deprecated alias of ${fleetName}) ${description}`, schema, handler);
+    // radio_* aliases are gated behind AF_RADIO_ALIASES (default ON for
+    // backward compatibility, so existing behavior is unchanged).
+    // Set AF_RADIO_ALIASES=0 to drop them — removes the duplicate tool-name
+    // injection and the double ToolSearch result payload.
+    if (process.env.AF_RADIO_ALIASES !== "0") {
+      const radioName = `radio_${fleetName.slice("fleet_".length)}`;
+      server.tool(radioName, `(deprecated alias of ${fleetName}) ${description}`, schema, handler);
+    }
   };
 
   registerTool(
@@ -139,9 +231,13 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     { name: z.string().describe("Your display name for this session") },
     async ({ name }) => {
       try {
-        const result = await client.register(name, joinToken, currentToken ?? undefined);
+        // Pass the Claude session id so the hub stamps sid->callsign at join time —
+        // makes GET /whoami (the rewake resolver) authoritative from the first beat.
+        const sid = process.env.CLAUDE_CODE_SESSION_ID;
+        const result = await client.register(name, joinToken, currentToken ?? undefined, sid ?? undefined);
         currentToken = result.token;
         currentName = result.name;
+        persistIdentity(); // T5: survive an MCP reconnect without a manual re-join
         return {
           content: [
             {
@@ -201,6 +297,58 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       } catch (e) {
         return {
           content: [{ type: "text" as const, text: `Become-referee failed: ${(e as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // REFEREE failover: member-gated + vacancy-gated claim (no admin token). The
+  // privileged force path stays available as fleet_become_referee.
+  registerTool(
+    "fleet_claim_referee",
+    "Claim the REFEREE coordinator seat — succeeds only when it is empty (e.g. the prior referee was killed/offline). No admin token required; gated on fleet membership + vacancy. If a live referee holds the seat, the claim is refused.",
+    {},
+    async () => {
+      if (!currentToken) {
+        return {
+          content: [{ type: "text" as const, text: "Cannot claim REFEREE: not joined to the fleet (no session token). Call fleet_join first." }],
+          isError: true,
+        };
+      }
+      try {
+        const sid = process.env.CLAUDE_CODE_SESSION_ID;
+        const { status, data } = await client.claimReferee(currentToken, currentName ?? undefined, sid ?? undefined);
+        if (status === 200 && data.token && data.name) {
+          currentToken = data.token;
+          currentName = data.name;
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `You are now "${currentName}". The REFEREE seat was vacant and you claimed it; all subsequent fleet tools speak as ${currentName} and carry [principal].`,
+              },
+            ],
+          };
+        }
+        if (status === 409) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `REFEREE seat is held by a live referee (${data.holder ?? "REFEREE"}); not claiming. Use fleet_become_referee (admin token) only if you must force it.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: `Claim-referee failed (${status}): ${data.error ?? "unknown error"}` }],
+          isError: true,
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Claim-referee failed: ${(e as Error).message}` }],
           isError: true,
         };
       }
@@ -358,8 +506,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         }
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          forgetIdentity();
           return {
             content: [
               {
@@ -424,8 +571,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         // Check for kill signal from operator
         const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
         if (killed) {
-          currentToken = null;
-          currentName = null;
+          forgetIdentity();
           return {
             content: [
               {
@@ -466,8 +612,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       } catch (e) {
         const msg = (e as Error).message;
         if (msg === "Unauthorized") {
-          currentToken = null;
-          currentName = null;
+          forgetIdentity();
           return {
             content: [
               {
@@ -1266,8 +1411,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     try {
       await client.unregister(currentToken);
       const name = currentName;
-      currentToken = null;
-      currentName = null;
+      forgetIdentity(); // T5: sign-off clears the persisted token too
       return {
         content: [{ type: "text" as const, text: `Unregistered "${name}". Disconnected from hub.` }],
       };
@@ -1287,6 +1431,243 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "(alias of fleet_disconnect) Sign off and disconnect from the Agent Fleet hub. Over and out.",
     {},
     radioDisconnectHandler,
+  );
+
+  // ── Loop governor (Phase 1): make loops first-class GOVERNED objects ───────────
+  // The hub is the GOVERNOR, not the executor: your agent runs its own loop and calls
+  // fleet_loop_tick each iteration to get a continue/stop decision. Stop-conditions are
+  // a hard guardrail — the fleet rides a shared quota, so a runaway loop burns everyone's.
+  const notOnAir = {
+    content: [{ type: "text" as const, text: "Not on the air. Use fleet_join first." }],
+    isError: true as const,
+  };
+  registerTool(
+    "fleet_loop_create",
+    "Loop governor: register a GOVERNED loop so iterative/autonomous work runs under enforceable stop-conditions. Returns the loop id; call fleet_loop_tick each iteration for a continue/stop decision. You become the loop's owner (only you or an operator may pause/resume/stop it).",
+    {
+      kind: z.string().describe("Loop kind, e.g. 'evaluator_optimizer' | 'autonomous' | 'generic'."),
+      label: z.string().describe("Human-readable label for the loop."),
+      config: z
+        .object({
+          max_iterations: z.number().optional().describe("Hard backstop on iterations."),
+          token_budget: z.number().optional().describe("Stop when accumulated agent-reported tokens reach this."),
+          wall_clock_timeout_ms: z.number().optional().describe("Stop when (now - created_at) reaches this."),
+          completeness_threshold: z.number().optional().describe("Stop when reported completeness >= this (0..1)."),
+          confidence_threshold: z.number().optional().describe("Stop when reported confidence >= this (0..1)."),
+          diminishing_returns: z
+            .object({ window: z.number(), min_improvement: z.number() })
+            .optional()
+            .describe("Stop when the last `window` improvements are all below min_improvement."),
+          repetition: z
+            .object({ window: z.number() })
+            .optional()
+            .describe("Stop when the last `window` reported signatures are all identical."),
+          evaluator_optimizer: z
+            .object({
+              completeness_target: z
+                .number()
+                .optional()
+                .describe("Accept (guardrail) when reported completeness >= this, even if the judge keeps saying retry."),
+              plateau: z
+                .object({ window: z.number(), epsilon: z.number() })
+                .optional()
+                .describe("Stop with 'plateau' when the last `window` completeness scores span <= epsilon."),
+            })
+            .optional()
+            .describe("Evaluator-optimizer guardrails for kind:'evaluator_optimizer' loops (use with fleet_loop_verdict)."),
+          fleet_pool: z.string().nullable().optional().describe("Seam for a future fleet-wide quota pool."),
+        })
+        .optional()
+        .describe("Composable stop-conditions, all optional, evaluated OR-wise (first-trip-wins)."),
+      interval_ms: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Phase 3: makes this a RECURRING loop firing every interval_ms. The hub re-arms the next fire off a wall-clock grid (anchor + N*interval), so a late tick never makes the schedule drift. Omit for a normal one-shot loop.",
+        ),
+      anchor_ms: z
+        .number()
+        .optional()
+        .describe(
+          "Phase 3: epoch-ms grid origin for a recurring loop (fires at anchor, anchor+interval, ...). Defaults to creation time. Only meaningful with interval_ms.",
+        ),
+    },
+    async ({ kind, label, config, interval_ms, anchor_ms }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopCreate(currentToken, {
+          kind,
+          label,
+          config,
+          interval_ms,
+          anchor_ms,
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop create failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_tick",
+    "Loop governor — THE control point. Report this iteration's progress; the hub evaluates ALL stop-conditions and returns {continue, stop_reason?}. Call once per iteration; stop your loop when continue is false.",
+    {
+      id: z.string().describe("Loop id from fleet_loop_create."),
+      iteration_delta: z.number().optional().describe("Iterations to add (default 1)."),
+      tokens_delta: z.number().optional().describe("Tokens consumed this iteration (agent-reported; default 0)."),
+      improvement: z.number().optional().describe("Progress delta this iteration (for diminishing-returns)."),
+      completeness: z.number().optional().describe("Current completeness 0..1 (for completeness_threshold)."),
+      confidence: z.number().optional().describe("Current confidence 0..1 (for confidence_threshold)."),
+      signature: z.string().optional().describe("Opaque hash of this iteration's action (for repetition detection)."),
+    },
+    async ({ id, iteration_delta, tokens_delta, improvement, completeness, confidence, signature }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopTick(currentToken, {
+          id,
+          iteration_delta,
+          tokens_delta,
+          improvement,
+          completeness,
+          confidence,
+          signature,
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop tick failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_verdict",
+    "Loop governor (evaluator-optimizer): submit a JUDGE's structured verdict for this iteration. The hub records the completeness-score trajectory, then returns {result:{continue, stop_reason?}, loop}. stop_reason is 'accepted' (judge accepted, or completeness_target reached), 'escalated' (route to a human / HITL queue), or 'plateau' (scores stopped improving). Counts as one iteration. Bias mitigation: use a judge that did NOT produce the candidate, and pass its id as `judge`.",
+    {
+      id: z.string().describe("Loop id from fleet_loop_create."),
+      verdict: z
+        .object({
+          status: z.enum(["complete", "partial", "incomplete"]).describe("Overall judgment of the candidate."),
+          completeness: z.number().describe("How complete the result is, 0..1 (plotted as the score trajectory)."),
+          missing: z.array(z.string()).optional().describe("Gaps the judge identified."),
+          contradictions: z.array(z.string()).optional().describe("Internal inconsistencies the judge found."),
+          recommendation: z
+            .enum(["accept", "retry", "escalate"])
+            .describe("The action: accept=done, retry=iterate, escalate=hand to a human."),
+          rationale: z.string().optional().describe("Optional judge explanation (stored, never interpreted)."),
+          judge: z.string().optional().describe("Optional judge id/model for provenance / bias audits."),
+        })
+        .describe("Structured ResultVerifier verdict for this iteration."),
+      iteration_delta: z.number().optional().describe("Iterations to add (default 1)."),
+      tokens_delta: z.number().optional().describe("Tokens consumed this iteration (agent-reported; default 0)."),
+    },
+    async ({ id, verdict, iteration_delta, tokens_delta }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopVerdict(currentToken, { id, verdict, iteration_delta, tokens_delta });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop verdict failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_pause",
+    "Loop governor: pause a loop you own (ticks return continue:false with stop_reason 'paused' until resumed).",
+    { id: z.string().describe("Loop id.") },
+    async ({ id }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopLifecycle(currentToken, "/loop-pause", { id });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop pause failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_resume",
+    "Loop governor: resume a paused loop you own.",
+    { id: z.string().describe("Loop id.") },
+    async ({ id }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopLifecycle(currentToken, "/loop-resume", { id });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop resume failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_stop",
+    "Loop governor: stop a loop you own (terminal). Operators force-stop any loop via fleet_loop_admin_stop.",
+    {
+      id: z.string().describe("Loop id."),
+      reason: z.string().optional().describe("Optional stop reason (default external_terminate)."),
+    },
+    async ({ id, reason }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopLifecycle(currentToken, "/loop-stop", { id, reason });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop stop failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_get",
+    "Loop governor: fetch one loop's full record (status, config, accumulated state, stop_reason).",
+    { id: z.string().describe("Loop id.") },
+    async ({ id }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopGet(currentToken, id);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop get failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_list",
+    "Loop governor: list loops, optionally filtered by status or owner_callsign (the cockpit reads this).",
+    {
+      status: z.string().optional().describe("Filter: running | paused | stopped | completed."),
+      owner_callsign: z.string().optional().describe("Filter by owner callsign."),
+    },
+    async ({ status, owner_callsign }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopList(currentToken, { status, owner_callsign });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop list failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+  registerTool(
+    "fleet_loop_admin_stop",
+    "Loop governor (operator): force-stop ANY loop regardless of owner. Requires AGENT_FLEET_ADMIN_TOKEN in the environment. Use to kill a runaway loop burning the shared quota.",
+    {
+      id: z.string().describe("Loop id to force-stop."),
+      reason: z.string().optional().describe("Optional stop reason (default external_terminate)."),
+    },
+    async ({ id, reason }) => {
+      const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
+      if (!adminToken) {
+        return {
+          content: [{ type: "text" as const, text: "Cannot force-stop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment." }],
+          isError: true,
+        };
+      }
+      try {
+        const result = await client.loopAdminStop(adminToken, id, reason);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop admin-stop failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
   );
 
   return server;

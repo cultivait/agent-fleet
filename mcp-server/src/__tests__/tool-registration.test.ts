@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createMcpServer } from "../tools.js";
 
-// The 35 canonical fleet verbs (alias-transition: each also registered under
+// The 45 canonical fleet verbs (alias-transition: each also registered under
 // its radio_* counterpart, sharing the identical schema + handler).
 const FLEET_NAMES = [
   "fleet_join",
   "fleet_become_referee",
+  "fleet_claim_referee",
   "fleet_send",
   "fleet_over",
   "fleet_send_image",
@@ -39,6 +40,15 @@ const FLEET_NAMES = [
   "fleet_lock_release",
   "fleet_disconnect",
   "fleet_out",
+  "fleet_loop_create",
+  "fleet_loop_tick",
+  "fleet_loop_verdict",
+  "fleet_loop_pause",
+  "fleet_loop_resume",
+  "fleet_loop_stop",
+  "fleet_loop_get",
+  "fleet_loop_list",
+  "fleet_loop_admin_stop",
 ];
 
 describe("createMcpServer tool registration (alias-transition)", () => {
@@ -46,13 +56,13 @@ describe("createMcpServer tool registration (alias-transition)", () => {
   const reg = (server as unknown as { _registeredTools: Record<string, { callback: unknown }> })._registeredTools;
   const names = Object.keys(reg);
 
-  it("registers all 35 canonical fleet_* tools", () => {
+  it("registers all 45 canonical fleet_* tools", () => {
     for (const fleetName of FLEET_NAMES) {
       expect(names, `missing canonical tool ${fleetName}`).toContain(fleetName);
     }
   });
 
-  it("registers all 35 deprecated radio_* aliases", () => {
+  it("registers all 45 deprecated radio_* aliases", () => {
     for (const fleetName of FLEET_NAMES) {
       const radioName = `radio_${fleetName.slice("fleet_".length)}`;
       expect(names, `missing radio alias ${radioName}`).toContain(radioName);
@@ -62,13 +72,13 @@ describe("createMcpServer tool registration (alias-transition)", () => {
   it("each radio_* alias shares the exact handler of its fleet_* canonical", () => {
     // Representative sample: a plain tool, plus each of the three alias-pair
     // seconds (over/wait/out) that share a primary's handler.
-    const sample = ["join", "send", "over", "standby", "wait", "disconnect", "out", "task_claim", "lock_acquire"];
+    const sample = ["join", "send", "over", "standby", "wait", "disconnect", "out", "task_claim", "lock_acquire", "claim_referee", "loop_create", "loop_tick", "loop_verdict"];
     for (const verb of sample) {
       expect(reg[`radio_${verb}`].callback, `radio_${verb} handler mismatch`).toBe(reg[`fleet_${verb}`].callback);
     }
   });
 
-  it("registers exactly 70 tools total (35 fleet × 2)", () => {
-    expect(names.length).toBe(70);
+  it("registers exactly 90 tools total (45 fleet × 2)", () => {
+    expect(names.length).toBe(90);
   });
 });

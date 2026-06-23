@@ -7,6 +7,11 @@ interface RequestOptions {
   token?: string;
   body?: unknown;
   timeoutMs?: number;
+  // T5 (internal): _retried caps transparent re-auth at a single retry; _noReauth opts a
+  // call out of the 401→re-register→replay loop (the register/unregister calls themselves,
+  // so a failed (re)register can't recurse into another re-auth).
+  _retried?: boolean;
+  _noReauth?: boolean;
 }
 
 interface HubResponse<T = unknown> {
@@ -16,6 +21,12 @@ interface HubResponse<T = unknown> {
 
 export class HubClient {
   private baseUrl: URL;
+
+  // T5: set by tools.ts. On a 401 (hub no longer recognizes our token — MCP reconnect
+  // dropped it, or the hub restarted), request() calls this to re-register with the saved
+  // oldToken and returns a fresh token; the original request then replays once with it.
+  // Returns null to give up (never joined / operator-killed) so the 401 surfaces normally.
+  onUnauthorized?: () => Promise<string | null>;
 
   constructor(hubUrl: string) {
     this.baseUrl = new URL(hubUrl);
@@ -57,6 +68,22 @@ export class HubClient {
           res.on("end", () => {
             const raw = Buffer.concat(chunks).toString();
             const status = res.statusCode ?? 0;
+            // T5 transparent re-auth: a 401 means the hub no longer knows our token. Ask the
+            // owner to re-register (returns a fresh token), then replay THIS request once with
+            // it. _retried caps it at one retry; _noReauth exempts the (un)register calls so a
+            // failed re-register can't recurse. On give-up the 401 falls through to the caller.
+            if (status === 401 && this.onUnauthorized && !options._retried && !options._noReauth) {
+              this.onUnauthorized()
+                .then((newToken) => {
+                  if (newToken) {
+                    this.request<T>({ ...options, token: newToken, _retried: true }).then(resolve, reject);
+                  } else {
+                    resolve({ status, data: {} as T });
+                  }
+                })
+                .catch(() => resolve({ status, data: {} as T }));
+              return;
+            }
             if (status === 204 || raw.length === 0) {
               resolve({ status, data: {} as T });
               return;
@@ -81,14 +108,24 @@ export class HubClient {
     });
   }
 
-  async register(name: string, joinToken: string, oldToken?: string): Promise<{ token: string; name: string }> {
-    const body: { name: string; oldToken?: string } = { name };
+  async register(
+    name: string,
+    joinToken: string,
+    oldToken?: string,
+    sid?: string,
+  ): Promise<{ token: string; name: string }> {
+    const body: { name: string; oldToken?: string; sid?: string } = { name };
     if (oldToken) body.oldToken = oldToken;
+    // sid lets the hub stamp the registry row's callsign at join time so GET /whoami
+    // (which the rewake hooks use) is authoritative immediately, not only after the
+    // first board-update.
+    if (sid) body.sid = sid;
     const res = await this.request<{ token: string; name: string }>({
       method: "POST",
       path: "/register",
       token: joinToken,
       body,
+      _noReauth: true, // T5: register IS the re-auth path — never recurse into it
     });
     if (res.status !== 200) {
       throw new Error((res.data as { error?: string }).error ?? "Registration failed");
@@ -121,11 +158,35 @@ export class HubClient {
     return res.data;
   }
 
+  // REFEREE failover: claim the REFEREE seat using the session's normal MEMBER
+  // token (NO admin token). The hub mints REFEREE only when the seat is vacant
+  // (no referee, or a stale/offline one); a live referee yields 409. The status is
+  // returned raw so the caller can distinguish 200 (claimed) from 409 (occupied)
+  // from other failures. `oldName` sheds the caller's current callsign; `sid`
+  // aligns the registry row.
+  async claimReferee(
+    token: string,
+    oldName?: string,
+    sid?: string,
+  ): Promise<{ status: number; data: { token?: string; name?: string; error?: string; holder?: string } }> {
+    const body: { oldName?: string; sid?: string } = {};
+    if (oldName) body.oldName = oldName;
+    if (sid) body.sid = sid;
+    const res = await this.request<{ token?: string; name?: string; error?: string; holder?: string }>({
+      method: "POST",
+      path: "/claim-referee",
+      token,
+      body,
+    });
+    return { status: res.status, data: res.data };
+  }
+
   async unregister(token: string): Promise<void> {
     await this.request({
       method: "POST",
       path: "/unregister",
       token,
+      _noReauth: true, // T5: sign-off is terminal — don't re-auth just to unregister
     });
   }
 
@@ -150,6 +211,122 @@ export class HubClient {
     });
     if (res.status !== 200) {
       throw new Error((res.data as { error?: string }).error ?? "Send failed");
+    }
+    return res.data;
+  }
+
+  // ── Loop governor (Phase 1) ──────────────────────────────────────────────────
+  async loopCreate(
+    token: string,
+    body: {
+      kind: string;
+      label: string;
+      owner_sid?: string | null;
+      config?: unknown;
+      // Phase 3: recurring-loop schedule (optional; omit for a normal loop).
+      interval_ms?: number | null;
+      anchor_ms?: number | null;
+    },
+  ): Promise<unknown> {
+    const res = await this.request<unknown>({ method: "POST", path: "/loop-create", token, body });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop create failed");
+    }
+    return res.data;
+  }
+
+  async loopTick(
+    token: string,
+    body: {
+      id: string;
+      iteration_delta?: number;
+      tokens_delta?: number;
+      improvement?: number;
+      completeness?: number;
+      confidence?: number;
+      signature?: string;
+    },
+  ): Promise<{ continue: boolean; stop_reason?: string }> {
+    const res = await this.request<{ continue: boolean; stop_reason?: string }>({
+      method: "POST",
+      path: "/loop-tick",
+      token,
+      body,
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop tick failed");
+    }
+    return res.data;
+  }
+
+  async loopVerdict(
+    token: string,
+    body: {
+      id: string;
+      verdict: unknown;
+      iteration_delta?: number;
+      tokens_delta?: number;
+    },
+  ): Promise<{ result: { continue: boolean; stop_reason?: string }; loop?: unknown }> {
+    const res = await this.request<{ result: { continue: boolean; stop_reason?: string }; loop?: unknown }>({
+      method: "POST",
+      path: "/loop-verdict",
+      token,
+      body,
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop verdict failed");
+    }
+    return res.data;
+  }
+
+  async loopLifecycle(
+    token: string,
+    path: "/loop-pause" | "/loop-resume" | "/loop-stop",
+    body: { id: string; reason?: string },
+  ): Promise<unknown> {
+    const res = await this.request<unknown>({ method: "POST", path, token, body });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop lifecycle op failed");
+    }
+    return res.data;
+  }
+
+  async loopGet(token: string, id: string): Promise<unknown> {
+    const res = await this.request<unknown>({
+      method: "POST",
+      path: "/loop-get",
+      token,
+      body: { id },
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop get failed");
+    }
+    return res.data;
+  }
+
+  async loopList(token: string, filter?: { status?: string; owner_callsign?: string }): Promise<unknown> {
+    const res = await this.request<unknown>({
+      method: "POST",
+      path: "/loop-list",
+      token,
+      body: filter ?? {},
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop list failed");
+    }
+    return res.data;
+  }
+
+  async loopAdminStop(adminToken: string, id: string, reason?: string): Promise<unknown> {
+    const res = await this.request<unknown>({
+      method: "POST",
+      path: "/loop-admin-stop",
+      token: adminToken,
+      body: { id, reason },
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop admin-stop failed");
     }
     return res.data;
   }
