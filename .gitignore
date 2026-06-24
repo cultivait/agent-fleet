@@ -3,8 +3,20 @@ dist/
 !plugin/dist/
 .env
 .claude/settings.local.json
+.claude/worktrees/
 .cursor/mcp.json
-docs/
+docs/*
+!docs/dual-instance-protocol.md
 *.db
 *.db-wal
 *.db-shm
+
+# install.sh generated artifacts (local, contain secrets / runtime state — never commit)
+.mcp.json
+/data/
+/logs/
+.hub.pid
+
+# one-time walkie-talkie->agent-fleet migration tool — a fresh clone-and-go user never
+# runs it, so keep it out of the package (move to scripts/fleet/legacy/ if a record is wanted)
+scripts/fleet/cutover.sh

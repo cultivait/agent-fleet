@@ -165,7 +165,7 @@ describe("authentication", () => {
     });
     expect(inboxRes.status).toBe(200);
     const inbox = (await inboxRes.json()) as { messages: Array<{ from: string; principal?: boolean }> };
-    const msg = inbox.messages.find((m) => m.from === "operator");
+    const msg = inbox.messages.find((m) => m.from === "Operator");
     expect(msg?.principal).toBe(true);
   });
 });

@@ -7,7 +7,7 @@
 // this executor CARRIES THEM OUT. It is a non-agent Node process precisely so the
 // auto-mode classifier wall (which guards a Claude INSTANCE mutating shared/
 // persistent state) does not bind it — a daemon's reap/post is ring-1 fleet-ops
-// inside the operator's envelope (design §6/§6c).
+// inside the operator's envelope (WS5 design §6/§6c).
 //
 // SAFETY (load-bearing):
 //   • DRY-RUN is the DEFAULT. Nothing destructive runs until WT_CONDUCTOR_ARMED=1.
@@ -38,9 +38,9 @@ import { readControl } from "./conductor-control.mjs";
 
 const execFileP = promisify(execFile);
 
-const HUB_URL = process.env.WALKIE_TALKIE_HUB_URL || "http://localhost:9559";
+const HUB_URL = process.env.AGENT_FLEET_HUB_URL || "http://localhost:9559";
 const STATE_FILE =
-  process.env.WT_CONDUCTOR_STATE_FILE || join(homedir(), ".config", "walkie-talkie", "conductor-state.json");
+  process.env.AF_CONDUCTOR_STATE_FILE || join(homedir(), ".config", "agent-fleet", "conductor-state.json");
 const OWNER_SID = process.env.WT_CONDUCTOR_SID || "conductor-executor";
 const REAP_LEASE_MS = Number(process.env.WT_CONDUCTOR_REAP_LEASE_MS || 60_000);
 // Brain (compiled). Override via WT_CONDUCTOR_BRAIN; default = ../../hub/dist/conductor.js.
@@ -57,7 +57,7 @@ const BRAIN_URL =
 //   • STUCK-DETECTION (open-task + flat = hung) stays DEFERRED: no in-band signal
 //     separates busy-foreground from hung (a foreground tool freezes the gauge
 //     AND suspends the turn-based model, so a probe can't answer either). It is
-//     unblocked only by an out-of-band PreToolUse "entering tool" BRACKET (a
+//     unblocked only by an out-of-band PreToolUse "entering tool" BRACKET (an
 //     operator-gated hook); until then it is UNKNOWN / no-action.
 //   • The reap MACHINERY below (lock-elected, belt-checked, targeted kill) is
 //     retained for the FUTURE armed reap trigger; it fires nothing today (the
@@ -460,7 +460,7 @@ function parseFlags(argv) {
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
   const env = await loadEnv();
-  const joinToken = env.WALKIE_TALKIE_JOIN_TOKEN || process.env.WALKIE_TALKIE_JOIN_TOKEN || null;
+  const joinToken = env.AGENT_FLEET_JOIN_TOKEN || process.env.AGENT_FLEET_JOIN_TOKEN || null;
   const armed = process.env.WT_CONDUCTOR_ARMED === "1" && !flags.dryRun;
 
   if (flags.mode === "print") {
@@ -487,7 +487,7 @@ async function main() {
   }
 
   if (!joinToken) {
-    console.error("✗ no WALKIE_TALKIE_JOIN_TOKEN (needed for locks + signed_off). Aborting.");
+    console.error("✗ no AGENT_FLEET_JOIN_TOKEN (needed for locks + signed_off). Aborting.");
     process.exitCode = 2;
     return;
   }

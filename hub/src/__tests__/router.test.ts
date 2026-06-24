@@ -220,9 +220,9 @@ describe("operator @all is scoped to the active channel's members", () => {
     joinChannel("#room", "alice");
     joinChannel("#room", "bob");
 
-    // The verified human operator (principal=true, callsign "operator") broadcasts @all
+    // The verified human operator (principal=true, callsign "Operator") broadcasts @all
     // in #room — operator-ping-all addresses every channel member without an @mention.
-    const msg = routeMessage("operator", "@all", "status check", "#room", undefined, true);
+    const msg = routeMessage("Operator", "@all", "status check", "#room", undefined, true);
     expect(msg.channel).toBe("#room");
 
     const { counts } = pendingCounts();

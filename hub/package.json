@@ -1,9 +1,8 @@
 {
   "name": "@agent-fleet/hub",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
-  "license": "MIT",
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
@@ -13,10 +12,13 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2"
+    "better-sqlite3": "^12.6.2",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.0"
   }
 }

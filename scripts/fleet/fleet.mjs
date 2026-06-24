@@ -1,15 +1,13 @@
 #!/usr/bin/env node
-// fleet.mjs — cross-platform fleet launcher (Linux + Windows).
+// fleet.mjs — local agent-fleet launcher (Linux).
 //
 // Standalone Node v22 ESM orchestrator. Built OUTSIDE the hub: NO hub restart,
-// NO hook changes, NO MCP bundle. Spawns N detached Claude Code sessions per
-// node; each self-joins the agent-fleet hub via its SessionStart hook.
+// NO hook changes, NO MCP bundle. Spawns N detached Claude Code sessions LOCALLY;
+// each self-joins the agent-fleet hub via its SessionStart hook.
 //
-// Model: detached attachable sessions; Linux + Windows;
-// callsigns self-assigned, reconciled by roster diff.
-//   Linux   → detached tmux session (holds claude) + a Ghostty window attached to it
-//             (--term ghostty|tmux|auto); env via Approach B (source ~/.config/agent-fleet/env, back-compat ~/.config/walkie-talkie)
-//   Windows → PowerShell Start-Process detached, token already in settings.json (Approach C)
+// Model: detached attachable sessions; callsigns self-assigned, reconciled by roster diff.
+//   Linux → detached tmux session (holds claude) + a Ghostty window attached to it
+//           (--term ghostty|tmux|auto); env via Approach B (source ~/.config/agent-fleet/env)
 //
 // Linux terminal modes (Ghostty-wraps-tmux hybrid):
 //   ghostty → tmux session + a Ghostty window running `tmux attach` (visible+interactive AND
@@ -18,7 +16,7 @@
 //   auto    → ghostty if a graphical session is detected, else tmux (default)
 //
 // Usage:
-//   fleet up --linux N --windows M [--work-dir DIR] [--term ghostty|tmux|auto] [--referee] [--yes]
+//   fleet up --linux N [--work-dir DIR] [--term ghostty|tmux|auto] [--referee] [--yes]
 //   fleet status
 //   fleet down [--yes]                                        (local tmux reap only)
 //
@@ -28,40 +26,65 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
-import { existsSync, readdirSync, realpathSync, appendFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WIN_SSH_ALIAS, preflightWindows, spawnWindows } from './windows.mjs'; // Lane B (D5-W), owner linux-b37c
 
 const execFileP = promisify(execFile);
 
-const HUB_URL = process.env.AGENT_FLEET_HUB_URL || process.env.WALKIE_TALKIE_HUB_URL || 'http://localhost:9559';
-// Config dir back-compat across the rename: honor AF_CONFIG_DIR (canonical) ?? legacy
-// WT_WALKIE_CONFIG_DIR, else prefer the new ~/.config/agent-fleet once it exists
-// (post-cutover) and fall back to the pre-cutover ~/.config/walkie-talkie — so the
-// launcher sources the right env file on BOTH sides of the dir rename (Lane B owns the cutover).
-const CONFIG_DIR = process.env.AF_CONFIG_DIR
-  || process.env.WT_WALKIE_CONFIG_DIR
-  || (existsSync(join(homedir(), '.config', 'agent-fleet', 'env'))
-        ? join(homedir(), '.config', 'agent-fleet')
-        : join(homedir(), '.config', 'walkie-talkie'));
+// Repo root: this file lives at <repo>/scripts/fleet/fleet.mjs, so the repo root is two
+// directories up. Used to template the builder --settings allowlist dynamically (no hardcoded path).
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(SCRIPT_DIR, '..', '..');
+const CLAUDE_DIR = join(homedir(), '.claude');
+
+const HUB_URL = process.env.AGENT_FLEET_HUB_URL || 'http://localhost:9559';
+// Config dir: AF_CONFIG_DIR override, else ~/.config/agent-fleet. The launcher sources its
+// env file (join/admin tokens) from here (Approach B — no token VALUE ever hits a command line).
+const CONFIG_DIR = process.env.AF_CONFIG_DIR || join(homedir(), '.config', 'agent-fleet');
 const ENV_FILE = join(CONFIG_DIR, 'env');
 const AUDIT_FILE = join(CONFIG_DIR, 'fleet-audit.jsonl');
-const JOIN_TIMEOUT_MS = Number(process.env.AF_FLEET_JOIN_TIMEOUT_MS || process.env.WT_FLEET_JOIN_TIMEOUT_MS || 45000);
+// Pre-authorization for fleet BUILDERS: a SCOPED --settings allowlist (Edit/Write on the trusted
+// fleet trees) layered on the default AUTO mode, so a builder can self-modify hooks/launcher/mcp
+// WITHOUT a per-edit prompt while still joining the fleet normally. NOTE: --permission-mode
+// acceptEdits is NOT usable here — it prompts for every MCP call, so the builder hangs before
+// fleet_join. The REFEREE lane never gets this (it coordinates, never edits). The allowlist file is
+// GENERATED on every `up` from the dynamic repo-root + ~/.claude (no hardcoded paths). Lives next to the launcher.
+const BUILDER_SETTINGS = join(SCRIPT_DIR, 'fleet-builder-settings.json');
+// T3 strict-mcp-config (Variant B): fleet BUILDERS spawn with `--strict-mcp-config --mcp-config FLEET_MCP`
+// so they load ONLY the agent-fleet MCP — dropping any local mcpServers and connectors that bloat every
+// spawn's context. --strict-mcp-config ALONE also drops agent-fleet (the agent can't join), so FLEET_MCP
+// RE-DECLARES it. The config's plugin path is resolved DYNAMICALLY from installed_plugins.json (never a
+// hardcoded version dir) and regenerated on every `up`, so a plugin upgrade can't silently break spawns.
+// REFEREE lane is exempt (keeps full tools to coordinate).
+const FLEET_MCP = join(SCRIPT_DIR, 'fleet-mcp.json');
+const PLUGINS_DIR = join(homedir(), '.claude', 'plugins');
+const JOIN_TIMEOUT_MS = Number(process.env.AF_FLEET_JOIN_TIMEOUT_MS || 45000);
 const POLL_INTERVAL_MS = 3000;
 
 // Hard concurrency ceiling for `fleet up` (current live local fleet + requested must not exceed it).
 // Overridable via AF_FLEET_MAX (primarily for tests). A safety rail: real spawns join the LIVE hub
 // and burn API tokens, so an accidental `--linux 50` must be refused, not honored.
-const MAX_CONCURRENT_FLEET = 20; // headroom for multiple concurrent projects
+const MAX_CONCURRENT_FLEET = 20;
 
 // A bare `claude` boots and sits idle at the prompt — the SessionStart hook injects the
 // "call fleet_join" instruction but the agent only acts on it when it takes a turn. So every
 // spawned teammate needs an INITIAL PROMPT to fire that first turn (→ join → stay interactive).
 // Overridable per-run via --prompt, or globally via AF_FLEET_PROMPT.
-const DEFAULT_PROMPT = process.env.AF_FLEET_PROMPT || process.env.WT_FLEET_PROMPT
+const DEFAULT_PROMPT = process.env.AF_FLEET_PROMPT
   || 'You are a fleet teammate launched by the fleet launcher. Run your startup now: call fleet_join to join the agent-fleet, set a one-line mission with fleet_mission, then STOP — end your turn. Do NOT sit in a fleet_standby loop. A Stop-hook re-wakes you when work is queued for your callsign; only then call fleet_check ONCE to receive it, handle it, and stop again. Keep all comms terse.';
+
+// REFEREE startup prompt. The --referee lane sets AF_ROLE=referee and the
+// SessionStart hook INJECTS a "call fleet_become_referee" instruction — but the
+// agent's actual turn-prompt is what it acts on, and DEFAULT_PROMPT explicitly says
+// "call fleet_join", which pre-empts the hook: the referee registers via the member
+// join path and keeps its default linux-XXXX callsign (the reserved-name register is
+// never attempted). Fix at the source: a referee spawn is handed THIS prompt instead,
+// so its startup action is fleet_become_referee (the admin path that mints the reserved
+// REFEREE seat). Overridable: an explicit --prompt still wins (see buildSpawnInner).
+const REFEREE_PROMPT = process.env.AF_REFEREE_PROMPT
+  || 'You are the fleet REFEREE — the operator-identity coordinator launched by the fleet launcher. Run your startup now: call fleet_become_referee to take the reserved REFEREE seat (it promotes this session via the admin token; the join path refuses reserved names, so do NOT call fleet_join). Then set a one-line mission with fleet_mission, then STOP — end your turn. Do NOT sit in a fleet_standby loop. A Stop-hook re-wakes you when work is queued for your callsign; only then call fleet_check ONCE to receive it, handle it, and stop again. Keep all comms terse.';
 
 // ───────────────────────────── pure helpers (unit-tested) ─────────────────────────────
 
@@ -77,7 +100,7 @@ export function parseArgs(argv) {
     else if (a === '--prompt') out.prompt = argv[++i];
     else if (a === '--yes') out.yes = true;
     else if (a === '--dry-run') out.dryRun = true;
-    // --referee: birth an operator-identity REFEREE (AF_ROLE/WT_ROLE=referee + the admin token reaches
+    // --referee: birth an operator-identity REFEREE (AF_ROLE=referee + the admin token reaches
     // this spawn ONLY). Least-privilege: every OTHER spawn has the admin token unset (see buildSpawnInner).
     else if (a === '--referee') out.referee = true;
     else throw new Error(`unknown arg: ${a}`);
@@ -88,9 +111,9 @@ export function parseArgs(argv) {
   if (!['auto', 'ghostty', 'tmux'].includes(out.term)) throw new Error(`--term must be auto|ghostty|tmux (got ${out.term})`);
   // A REFEREE is a single operator identity (the hub reserves the 'referee' callsign and admin-register
   // sheds any prior holder) — refuse a multi-spawn that would birth colliding referees, and keep it on
-  // the wired Linux path (the Windows lane does not carry --referee yet).
-  if (out.referee && (out.linux !== 1 || out.windows !== 0)) {
-    throw new Error('--referee births a single REFEREE identity — use it with exactly `--linux 1` and no --windows');
+  // the wired Linux path.
+  if (out.referee && out.linux !== 1) {
+    throw new Error('--referee births a single REFEREE identity — use it with exactly `--linux 1`');
   }
   return out;
 }
@@ -227,45 +250,171 @@ function shQuote(s) {
  * Pure: build the `bash -lc` payload that sets up a spawned session's env and execs claude.
  * The env file is SOURCED (Approach B) so no token VALUE ever lands on a command line.
  *
- * LEAST-PRIVILEGE (task #3): the env file carries BOTH the join AND the admin token, but a plain
+ * LEAST-PRIVILEGE: the env file carries BOTH the join AND the admin token, but a plain
  * builder must never hold the admin token. So the DEFAULT lane `unset`s AGENT_FLEET_ADMIN_TOKEN
- * (and the legacy WALKIE_TALKIE_ADMIN_TOKEN) right after the source — and because this is the
- * `bash -lc` payload (runs after ALL shell startup), it clears the admin token whether it came from
- * the file source OR was inherited from the launcher's own environment. The join token is kept (the
- * spawn must self-join the hub).
+ * right after the source — and because this is the `bash -lc` payload (runs after ALL shell startup),
+ * it clears the admin token whether it came from the file source OR was inherited from the launcher's
+ * own environment. The join token is kept (the spawn must self-join the hub).
  *
  * The --referee lane is the ONE spawn that legitimately needs the admin token (its session promotes
  * itself to the reserved REFEREE callsign via fleet_become_referee). It KEEPS the admin token and
- * exports AF_ROLE/WT_ROLE=referee, which the live SessionStart hook keys on to birth the REFEREE identity.
+ * exports AF_ROLE=referee, which the live SessionStart hook keys on to birth the REFEREE identity.
  */
 /** Sanitize a remote-control / radio callsign to the hub-safe charset [A-Za-z0-9-]. */
 export function sanitizeCallsign(s) {
   return String(s).replace(/[^A-Za-z0-9-]/g, "");
 }
 
+// ── T3 strict-mcp-config (Variant B): resolve the installed agent-fleet plugin dynamically ──
+
+/**
+ * Pure: given the parsed ~/.claude/plugins/installed_plugins.json, return the installPath for the
+ * agent-fleet plugin (any `agent-fleet@<marketplace>` key), or null if absent. This is the
+ * VERSION-AGNOSTIC source of truth — Claude Code rewrites installPath on every plugin upgrade, so
+ * reading it (instead of hardcoding a version dir) means an upgrade can never silently break spawns.
+ */
+export function pickPluginInstallPath(installedJson, name = 'agent-fleet') {
+  const plugins = installedJson && installedJson.plugins;
+  if (!plugins || typeof plugins !== 'object') return null;
+  const key = Object.keys(plugins).find((k) => k === name || k.startsWith(`${name}@`));
+  if (!key) return null;
+  const entries = plugins[key];
+  const entry = Array.isArray(entries) ? entries[0] : entries;
+  return (entry && typeof entry.installPath === 'string' && entry.installPath) || null;
+}
+
+/**
+ * Pure: build the Variant-B MCP config object for a resolved plugin dir. ONLY agent-fleet is
+ * declared (re-declared because --strict-mcp-config alone also drops it). No env block — the
+ * token + hub URL reach the MCP child from the sourced env file already in claude's environment.
+ */
+export function buildFleetMcpConfig(pluginDir) {
+  return {
+    mcpServers: {
+      'agent-fleet': { command: 'node', args: [join(pluginDir, 'dist', 'mcp-server.mjs')] },
+    },
+  };
+}
+
+/**
+ * I/O: resolve the agent-fleet plugin dir, newest-first. Order: explicit CLAUDE_PLUGIN_ROOT env →
+ * installed_plugins.json installPath → glob the cache for the newest version dir that actually has
+ * dist/mcp-server.mjs. Returns the plugin ROOT dir (the one containing dist/), or null if none found.
+ */
+export function resolvePluginDir(env = process.env) {
+  const hasServer = (dir) => dir && existsSync(join(dir, 'dist', 'mcp-server.mjs'));
+  // 1) explicit override
+  if (hasServer(env.CLAUDE_PLUGIN_ROOT)) return env.CLAUDE_PLUGIN_ROOT;
+  // 2) the canonical registry
+  try {
+    const installed = JSON.parse(readFileSync(join(PLUGINS_DIR, 'installed_plugins.json'), 'utf8'));
+    const p = pickPluginInstallPath(installed);
+    if (hasServer(p)) return p;
+  } catch {}
+  // 3) glob the cache: ~/.claude/plugins/cache/<marketplace>/agent-fleet/<version>/
+  try {
+    const cache = join(PLUGINS_DIR, 'cache');
+    const candidates = [];
+    for (const market of readdirSync(cache)) {
+      const af = join(cache, market, 'agent-fleet');
+      if (!existsSync(af)) continue;
+      for (const ver of readdirSync(af)) {
+        const dir = join(af, ver);
+        if (hasServer(dir)) candidates.push(dir);
+      }
+    }
+    // newest installed wins (mtime is the safe cross-version sort; semver strings don't compare cleanly)
+    candidates.sort((a, b) => statMtime(b) - statMtime(a));
+    if (candidates.length) return candidates[0];
+  } catch {}
+  // 4) clone-and-go fallback: this repo always ships the vendored bundle at
+  //    <repo>/plugin/dist/mcp-server.mjs (the same one install.sh writes into
+  //    .mcp.json). A clone-and-go install has NO marketplace plugin, so resolve
+  //    the in-repo plugin dir — this is what makes Launch Referee + builder
+  //    spawns work on a fresh public install. Fallback only: marketplace paths win.
+  if (hasServer(join(REPO_ROOT, 'plugin'))) return join(REPO_ROOT, 'plugin');
+  return null;
+}
+
+function statMtime(dir) {
+  try { return Number(statSync(dir).mtimeMs); } catch { return 0; }
+}
+
+/**
+ * I/O: regenerate FLEET_MCP (fleet-mcp.json) from the freshly-resolved plugin dir and return its path.
+ * Called on every `up` so the config tracks plugin upgrades. Throws if the plugin can't be resolved —
+ * a builder spawned against a missing MCP would fail to join, so fail LOUD here rather than spawn-dead.
+ */
+export function writeFleetMcpConfig(env = process.env) {
+  const pluginDir = resolvePluginDir(env);
+  if (!pluginDir) throw new Error(`cannot resolve agent-fleet plugin dir under ${PLUGINS_DIR} (installed_plugins.json + cache glob both missed)`);
+  writeFileSync(FLEET_MCP, JSON.stringify(buildFleetMcpConfig(pluginDir), null, 2) + '\n');
+  return FLEET_MCP;
+}
+
+/**
+ * Pure: the builder --settings allowlist object. Builders run in AUTO mode with a SCOPED Edit/Write
+ * allowlist on the trusted fleet trees: the agent-fleet MCP + Claude Code hooks (~/.claude/hooks) +
+ * the repo itself (repoRoot). Paths are computed from the dynamic repo root + homedir — no hardcoded
+ * user/path. claudeDir defaults to ~/.claude.
+ */
+export function buildBuilderSettings(repoRoot = REPO_ROOT, claudeDir = CLAUDE_DIR) {
+  const hooksDir = join(claudeDir, 'hooks');
+  return {
+    permissions: {
+      allow: [
+        'mcp__agent-fleet',
+        'mcp__plugin_agent-fleet_agent-fleet',
+        `Edit(${join(hooksDir, '**')})`,
+        `Write(${join(hooksDir, '**')})`,
+        `Edit(${join(repoRoot, '**')})`,
+        `Write(${join(repoRoot, '**')})`,
+      ],
+    },
+  };
+}
+
+/**
+ * I/O: regenerate BUILDER_SETTINGS (fleet-builder-settings.json) from the dynamic repo root + ~/.claude.
+ * Called on every `up` so the allowlist has no hardcoded paths and tracks wherever the repo is checked out.
+ */
+export function writeBuilderSettings(repoRoot = REPO_ROOT, claudeDir = CLAUDE_DIR) {
+  writeFileSync(BUILDER_SETTINGS, JSON.stringify(buildBuilderSettings(repoRoot, claudeDir), null, 2) + '\n');
+  return BUILDER_SETTINGS;
+}
+
 export function buildSpawnInner({ envFile, id, prompt, referee = false }) {
   // Inserted AFTER the source: default sheds admin (least-privilege), referee marks the role + keeps admin.
-  // Non-referee also sheds any leaked AF_ROLE/WT_ROLE — a parent/operator shell carrying *_ROLE=referee
+  // Non-referee also sheds any leaked AF_ROLE — a parent/operator shell carrying AF_ROLE=referee
   // must NOT ride into a plain builder, else the SessionStart hook would self-promote it to the reserved
-  // REFEREE identity. The referee lane keeps AF_ROLE/WT_ROLE=referee as its deliberate identity driver.
-  // TRANSITION: export BOTH the new (AF_*) and old (WT_*) role names, and unset BOTH admin-token names,
-  // so a spawned agent's hooks work whether they read the new or the legacy variable.
+  // REFEREE identity. The referee lane keeps AF_ROLE=referee as its deliberate identity driver.
   const roleLine = referee
-    ? 'export AF_ROLE=referee; export WT_ROLE=referee; '
-    : 'unset AGENT_FLEET_ADMIN_TOKEN; unset WALKIE_TALKIE_ADMIN_TOKEN; unset AF_ROLE; unset WT_ROLE; ';
-  // WS-D(1) remote-control: align tmux session id = fleet callsign = Desktop/mobile name. The
-  // non-referee callsign is linux-<rid> (matches the wt-<rid> session); export AF_CALLSIGN/WT_CALLSIGN so
-  // the SessionStart hook adopts it, AND pass it to `--remote-control`. The REFEREE lane keeps
-  // AF_ROLE/WT_ROLE=referee as the identity driver (fleet promotes it to the reserved REFEREE callsign)
-  // and must NOT set the callsign vars — it only labels the remote-control target REFEREE.
+    ? 'export AF_ROLE=referee; '
+    : 'unset AGENT_FLEET_ADMIN_TOKEN; unset AF_ROLE; ';
+  // remote-control: align tmux session id = fleet callsign = remote-control name. The non-referee
+  // callsign is linux-<rid> (matches the wt-<rid> session); export AF_CALLSIGN so the SessionStart
+  // hook adopts it, AND pass it to `--remote-control`. The REFEREE lane keeps AF_ROLE=referee as the
+  // identity driver (fleet promotes it to the reserved REFEREE callsign) and must NOT set the callsign
+  // var — it only labels the remote-control target REFEREE.
   const callsign = referee ? 'REFEREE' : sanitizeCallsign(`linux-${id}`);
-  const callsignLine = referee ? '' : `export AF_CALLSIGN=${callsign}; export WT_CALLSIGN=${callsign}; `;
+  const callsignLine = referee ? '' : `export AF_CALLSIGN=${callsign}; `;
+  // Referee gets the become-referee startup prompt, NOT the generic "call fleet_join"
+  // DEFAULT_PROMPT (which would pre-empt the hook and keep the linux-XXXX callsign). An
+  // explicit per-run --prompt (anything other than the default) is still honored.
+  const effectivePrompt = referee && prompt === DEFAULT_PROMPT ? REFEREE_PROMPT : prompt;
+  // Builders carry the scoped --settings allowlist (see BUILDER_SETTINGS) so they can self-mod
+  // the trusted trees under auto mode without per-edit prompts. REFEREE lane stays unflagged.
+  const settingsFlag = referee ? '' : `--settings ${shQuote(BUILDER_SETTINGS)} `;
+  // T3 strict-mcp-config (Variant B): builders load ONLY the agent-fleet MCP (see FLEET_MCP) — dropping
+  // local mcpServers + connectors that bloat every spawn. --strict-mcp-config alone also drops agent-fleet,
+  // so FLEET_MCP re-declares it. REFEREE keeps full tools to coordinate → no mcpFlag. The launcher
+  // regenerates FLEET_MCP (writeFleetMcpConfig) before spawning so the plugin path is fresh.
+  const mcpFlag = referee ? '' : `--strict-mcp-config --mcp-config ${shQuote(FLEET_MCP)} `;
   // --no-chrome: fleet agents are headless tmux sessions with no browser-automation
   // role, but the Claude-in-Chrome integration is on by default and opens a new Chrome
-  // tab per spawned session (the operator's "a tab opens every time an agent spawns").
-  // Disable it here — independent of and fully compatible with --remote-control, which
-  // is a session server that opens no tab on its own.
-  return `set -a; . "${envFile}"; set +a; ${roleLine}${callsignLine}${v22PathPrefixSnippet()} export AF_SPAWN_ID=${id}; export WT_SPAWN_ID=${id}; exec claude --no-chrome --remote-control ${callsign} ${shQuote(prompt)}`;
+  // tab per spawned session. Disable it here — independent of and fully compatible with
+  // --remote-control, which is a session server that opens no tab on its own.
+  return `set -a; . "${envFile}"; set +a; ${roleLine}${callsignLine}${v22PathPrefixSnippet()} export AF_SPAWN_ID=${id}; exec claude --no-chrome ${settingsFlag}${mcpFlag}--remote-control ${callsign} ${shQuote(effectivePrompt)}`;
 }
 
 /** Build the exact tmux command for one Linux instance (no execution). `opts.referee` births a REFEREE. */
@@ -275,8 +424,8 @@ export function linuxSpawnCmd(workDir, prompt = DEFAULT_PROMPT, opts = {}) {
   // Approach B: source the canonical env file so the join token never hits a command line.
   // The positional prompt keeps claude INTERACTIVE (only -p is headless) but fires a first turn,
   // so the SessionStart join instruction actually runs — a bare `claude` would sit idle and never join.
-  // AF_SPAWN_ID/WT_SPAWN_ID carries the SAME rid that names the session into the spawned env BEFORE exec
-  // claude, so claude's SessionStart hook (a child process) inherits it and can correlate back to this spawn.
+  // AF_SPAWN_ID carries the SAME rid that names the session into the spawned env BEFORE exec claude,
+  // so claude's SessionStart hook (a child process) inherits it and can correlate back to this spawn.
   const inner = buildSpawnInner({ envFile: ENV_FILE, id, prompt, referee: opts.referee === true });
   const args = ['new-session', '-d', '-s', session, '-c', workDir, 'bash', '-lc', inner];
   return { session, rid: id, bin: 'tmux', args };
@@ -373,7 +522,7 @@ export function ghosttyAttachCmd(session, display, xauthority, bin = 'ghostty') 
 
 /** Locate a usable Ghostty binary (snap-first), or null. */
 function resolveGhostty() {
-  for (const p of [process.env.AF_GHOSTTY_BIN, process.env.WT_GHOSTTY_BIN, '/snap/bin/ghostty', '/usr/bin/ghostty', '/usr/local/bin/ghostty']) {
+  for (const p of [process.env.AF_GHOSTTY_BIN, '/snap/bin/ghostty', '/usr/bin/ghostty', '/usr/local/bin/ghostty']) {
     if (p && existsSync(p)) return p;
   }
   return null;
@@ -382,11 +531,11 @@ function resolveGhostty() {
 /**
  * Resolve the local graphical session (DISPLAY + XAUTHORITY) so a window can open on
  * the box's physical seat even though `fleet` runs in a headless pts. Returns null when
- * no graphical session is available (→ headless tmux fallback). AF_FLEET_NO_GUI (legacy WT_FLEET_NO_GUI) forces null.
+ * no graphical session is available (→ headless tmux fallback). AF_FLEET_NO_GUI forces null.
  */
 export function resolveDisplay(env = process.env) {
-  if (env.AF_FLEET_NO_GUI || env.WT_FLEET_NO_GUI) return null;
-  let display = env.AF_FLEET_DISPLAY || env.WT_FLEET_DISPLAY || env.DISPLAY;
+  if (env.AF_FLEET_NO_GUI) return null;
+  let display = env.AF_FLEET_DISPLAY || env.DISPLAY;
   if (!display) {
     try {
       const sock = readdirSync('/tmp/.X11-unix').find((f) => /^X\d+$/.test(f));
@@ -395,7 +544,7 @@ export function resolveDisplay(env = process.env) {
   }
   if (!display) return null;
   const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
-  const xauthority = [env.AF_FLEET_XAUTHORITY, env.WT_FLEET_XAUTHORITY, env.XAUTHORITY, `/run/user/${uid}/gdm/Xauthority`, `${homedir()}/.Xauthority`]
+  const xauthority = [env.AF_FLEET_XAUTHORITY, env.XAUTHORITY, `/run/user/${uid}/gdm/Xauthority`, `${homedir()}/.Xauthority`]
     .find((p) => p && existsSync(p));
   if (!xauthority) return null;
   return { display, xauthority };
@@ -489,76 +638,82 @@ async function cmdUp(opts) {
   const willSpawn = opts.yes && !opts.dryRun;
   const ctx = { workDir: opts.workDir || homedir(), dryRun: !willSpawn, term: opts.term, prompt: opts.prompt, referee: opts.referee === true };
 
+  // Multi-host Windows spawn is not in the public launcher — local spawn only. --windows 0 is a no-op
+  // (it proceeds with the local linux spawn); any N>0 fails cleanly here.
+  if (opts.windows > 0) {
+    console.error('✗ multi-host Windows spawn is not in the public launcher; local spawn only (use --windows 0 or omit it).');
+    process.exitCode = 1;
+    return;
+  }
+
   // Preflight
   const hub = await preflightHub();
   if (!hub.ok) { console.error(`✗ preflight: ${hub.err}`); process.exitCode = 1; return; }
   console.log(`✓ hub reachable (${HUB_URL})`);
-  if (opts.windows > 0) {
-    const win = await preflightWindows();
-    if (!win.ok) {
-      console.error(`✗ preflight Windows: ${win.err}`);
-      console.error('  → skipping Windows node; re-run without --windows or fix the tunnel.');
-      opts.windows = 0;
-      if (opts.linux === 0) { process.exitCode = 1; return; }
-    } else {
-      console.log(`✓ Windows reachable (ssh ${WIN_SSH_ALIAS} + reverse tunnel up)`);
+
+  // Regenerate the builder configs (fleet-builder-settings.json + fleet-mcp.json) from the dynamic repo
+  // root + the freshly-resolved plugin dir before any spawn. Done in BOTH preview and real paths so a
+  // missing/moved plugin fails LOUD here (a builder spawned against a dead MCP can't join).
+  if (opts.linux > 0) {
+    try {
+      const s = writeBuilderSettings();
+      const p = writeFleetMcpConfig();
+      console.log(`✓ builder settings → ${s}`);
+      console.log(`✓ builder MCP config → ${p} (agent-fleet only, strict)`);
+    } catch (e) {
+      console.error(`✗ ${e.message}`);
+      process.exitCode = 1;
+      return;
     }
   }
 
   if (!willSpawn) {
     console.log(`\n── PREVIEW (no --yes; nothing will be spawned) ──`);
-    console.log(`Requested: linux=${opts.linux} windows=${opts.windows}  term=${opts.term}`);
+    console.log(`Requested: linux=${opts.linux}  term=${opts.term}`);
     console.log(`Prompt: ${opts.prompt.length > 88 ? opts.prompt.slice(0, 85) + '…' : opts.prompt}`);
-    if (opts.referee) console.log(`REFEREE birth: AF_ROLE/WT_ROLE=referee + admin token reaches THIS spawn only (all other spawns shed the admin token).`);
+    if (opts.referee) console.log(`REFEREE birth: AF_ROLE=referee + admin token reaches THIS spawn only (all other spawns shed the admin token).`);
     const lin = await spawnLinux(opts.linux, { ...ctx, dryRun: true });
     if (opts.linux > 0) console.log(`  Linux mode → ${lin.mode}${lin.mode === 'tmux-fallback' ? ' (ghostty unavailable; headless)' : ''}`);
     for (const s of lin.spawned) console.log(`  [linux]   ${s.cmd}`);
-    if (opts.windows > 0) {
-      const win = await spawnWindows(opts.windows, { ...ctx, dryRun: true });
-      for (const s of win.spawned) console.log(`  [windows] ${s.err || s.cmd}`);
-    }
     console.log(`\nRe-run with --yes to actually spawn (joins the LIVE hub).`);
     return;
   }
 
   // HARD CAP: refuse if this `up` would push the live local fleet over the ceiling. "current live" =
-  // count of live local wt-* tmux sessions (a local proxy for fleet size). Cap = AF_FLEET_MAX || 5.
-  const cap = Number(process.env.AF_FLEET_MAX || process.env.WT_FLEET_MAX || MAX_CONCURRENT_FLEET);
+  // count of live local wt-* tmux sessions (a local proxy for fleet size). Cap = AF_FLEET_MAX || default.
+  const cap = Number(process.env.AF_FLEET_MAX || MAX_CONCURRENT_FLEET);
   const currentLive = (await listFleetSessions()).length;
-  const decision = enforceCap(currentLive, opts.linux + opts.windows, cap);
+  const decision = enforceCap(currentLive, opts.linux, cap);
   if (!decision.allowed) { console.error(`✗ ${decision.reason}`); process.exitCode = 1; return; }
 
   // Real spawn (operator-gated). Load the join token from the sourced env file for best-effort /session-register.
   const env = await loadEnv();
-  ctx.joinToken = env.AGENT_FLEET_JOIN_TOKEN || env.WALKIE_TALKIE_JOIN_TOKEN || null;
+  ctx.joinToken = env.AGENT_FLEET_JOIN_TOKEN || null;
   const before = await roster();
   console.log(`\nRoster before: ${before.length} online`);
   const results = [];
   if (opts.linux > 0) results.push(await spawnLinux(opts.linux, ctx));
-  if (opts.windows > 0) results.push(await spawnWindows(opts.windows, ctx));
   for (const r of results) {
     const okN = r.spawned.filter((s) => s.ok).length;
     const modeNote = r.mode ? ` [${r.mode}]` : '';
     const windowed = r.spawned.filter((s) => s.windowed).length;
     const winNote = r.mode === 'ghostty' ? ` (${windowed} window${windowed === 1 ? '' : 's'} opened on :1)` : '';
-    // Log the success handles (tmux session name / pid:<n>) so spawns are reapable + correlatable (b37c/wcf gap).
+    // Log the success handles (tmux session name / pid:<n>) so spawns are reapable + correlatable.
     const okHandles = r.spawned.filter((s) => s.ok).map((s) => s.pid ? `${s.handle} (pid:${s.pid})` : s.handle).join(', ');
     console.log(`  spawned ${node(r)} ${okN}/${r.requested}${modeNote}${winNote}${okHandles ? ` → ${okHandles}` : ''}`
       + r.spawned.filter((s) => !s.ok).map((s) => `\n    ✗ ${s.handle}: ${s.err}`).join(''));
   }
 
-  // Recompute the expected count AFTER any preflight-skip (e.g. Windows tunnel down → opts.windows=0),
-  // so we don't wait on joins that were never spawned and burn the full JOIN_TIMEOUT (caught by linux-b37c).
-  const want = opts.linux + opts.windows;
+  const want = opts.linux;
   console.log(`\nWaiting for self-join (up to ${JOIN_TIMEOUT_MS / 1000}s)…`);
   const after = await waitForJoins(before, want);
-  const rec = reconcile(before, after, { linux: opts.linux, windows: opts.windows });
+  const rec = reconcile(before, after, { linux: opts.linux, windows: 0 });
   console.log(`\n── REPORT ──`);
-  console.log(`Requested: linux=${rec.requested.linux} windows=${rec.requested.windows}`);
-  console.log(`Joined:    linux=${rec.joinedByNode.linux} windows=${rec.joinedByNode.windows}`);
+  console.log(`Requested: linux=${rec.requested.linux}`);
+  console.log(`Joined:    linux=${rec.joinedByNode.linux}`);
   console.log(`New callsigns: ${rec.newNames.join(', ') || '(none)'}`);
   if (!rec.ok) {
-    console.error(`✗ shortfall: linux=${rec.shortfall.linux} windows=${rec.shortfall.windows} — these did NOT join (token/tunnel/spawn failure). NOT a healthy fleet.`);
+    console.error(`✗ shortfall: linux=${rec.shortfall.linux} — these did NOT join (token/spawn failure). NOT a healthy fleet.`);
     process.exitCode = 1;
   } else {
     console.log(`✓ fleet realized as requested.`);
@@ -568,15 +723,15 @@ async function cmdUp(opts) {
 function node(r) { return r.node.padEnd(8); }
 
 async function cmdDown(opts) {
-  // v1: local tmux reap only. Full cross-node teardown/reaping = 2nd-builder lane.
+  // Local tmux reap only.
   const sessions = await listFleetSessions();
   if (!sessions.length) { console.log('No local wt-* tmux sessions.'); return; }
   console.log(`Local fleet tmux sessions:\n  ${sessions.join('\n  ')}`);
-  if (!opts.yes) { console.log('\nRe-run `fleet down --yes` to kill them (Linux only; Windows reap deferred to D5 teardown lane).'); return; }
+  if (!opts.yes) { console.log('\nRe-run `fleet down --yes` to kill them.'); return; }
   for (const s of sessions) {
     await execFileP('tmux', ['kill-session', '-t', s]).then(() => console.log(`  killed ${s}`)).catch((e) => console.error(`  ✗ ${s}: ${e.message}`));
   }
-  console.log('Note: killed local sessions do not fleet_disconnect cleanly; stale callsigns may need POST /kick (admin token). Full reap = D5 teardown lane.');
+  console.log('Note: killed local sessions do not fleet_disconnect cleanly; stale callsigns may need POST /kick (admin token).');
 }
 
 /**
@@ -590,7 +745,7 @@ async function cmdReap(opts) {
   console.log(`Local fleet tmux sessions (${sessions.length}):\n  ${sessions.join('\n  ')}`);
   if (!opts.yes) { console.log('\nRe-run `fleet reap --yes` to kill ALL of them (one tmux kill-session each).'); return; }
   const env = await loadEnv();
-  const token = env.AGENT_FLEET_JOIN_TOKEN || env.WALKIE_TALKIE_JOIN_TOKEN || null;
+  const token = env.AGENT_FLEET_JOIN_TOKEN || null;
   const plan = reapPlan(sessions);
   let killed = 0;
   const signoffs = [];
@@ -613,10 +768,10 @@ async function cmdReap(opts) {
 }
 
 function usage() {
-  console.log(`fleet — D5 cross-platform fleet launcher (Linux + Windows)
+  console.log(`fleet — local agent-fleet launcher (Linux)
 
-  fleet up --linux N --windows M [--work-dir DIR] [--term ghostty|tmux|auto] [--prompt TEXT] [--referee] [--yes]
-      Preview (default) or spawn (--yes) N+M detached Claude Code sessions that join the hub.
+  fleet up --linux N [--work-dir DIR] [--term ghostty|tmux|auto] [--prompt TEXT] [--referee] [--yes]
+      Preview (default) or spawn (--yes) N detached Claude Code sessions that join the hub.
       --term ghostty  tmux session + a Ghostty window attached (visible + persistent; window on :1)
       --term tmux     headless detached tmux only (best for driving remotely over SSH)
       --term auto     ghostty if a graphical session is detected, else tmux (default)
@@ -624,19 +779,17 @@ function usage() {
                       first turn and join — a bare claude sits idle). Default: join, set mission, then stop (rewake-driven, no standby loop).
       --referee       Birth ONE operator-identity REFEREE: AF_ROLE=referee (the SessionStart hook
                       promotes it to the reserved REFEREE callsign) + the admin token reaches THIS
-                      spawn only. Requires exactly --linux 1 (no --windows). Every non-referee spawn
-                      has the admin token unset (least-privilege).
+                      spawn only. Requires exactly --linux 1. Every non-referee spawn has the admin
+                      token unset (least-privilege).
   fleet status            Show the current hub roster grouped by node.
-  fleet down [--yes]      List (or with --yes, kill) local fleet tmux sessions. Full reap = future lane.
+  fleet down [--yes]      List (or with --yes, kill) local fleet tmux sessions.
   fleet reap [--yes]      Preview (or with --yes, single-call kill-ALL) every local wt-* tmux session.
 
   Concurrency: \`fleet up\` refuses when (live local wt-* sessions + requested) > ${MAX_CONCURRENT_FLEET}
        (override via AF_FLEET_MAX). Spawns + reaps append to ~/.config/agent-fleet/fleet-audit.jsonl.
 
-  Env: AGENT_FLEET_HUB_URL (default ${HUB_URL}), AF_WIN_SSH_ALIAS (default ${WIN_SSH_ALIAS}),
-       AF_FLEET_NO_GUI (force headless), AF_GHOSTTY_BIN / AF_FLEET_DISPLAY / AF_FLEET_XAUTHORITY,
-       AF_FLEET_MAX (concurrency cap override).
-       (old WALKIE_TALKIE_*/WT_* names still read for back-compat.)`);
+  Env: AGENT_FLEET_HUB_URL (default ${HUB_URL}), AF_FLEET_NO_GUI (force headless),
+       AF_GHOSTTY_BIN / AF_FLEET_DISPLAY / AF_FLEET_XAUTHORITY, AF_FLEET_MAX (concurrency cap override).`);
 }
 
 async function main() {

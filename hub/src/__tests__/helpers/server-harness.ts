@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { resetAuthState } from "../../auth.js";
+import { mintCockpitToken, resetAuthState, resetCfAccessJwksCache, resetCockpitTokens } from "../../auth.js";
 import { initGeneralChannel, resetChannelState } from "../../channels.js";
 import { initDB } from "../../db.js";
 import { createHubServer } from "../../server.js";
@@ -8,6 +8,10 @@ export interface TestContext {
   baseUrl: string;
   adminToken: string;
   joinToken: string;
+  // A valid scoped cockpit token (A3-a) minted into the server's in-memory store
+  // so tests can pass the BROWSER-route gate (GET / and GET /events) the same way
+  // a real authenticated browser would after a GET /.
+  cockpitToken: string;
   server: Server;
 }
 
@@ -17,6 +21,8 @@ const JOIN_TOKEN = "test-join-token";
 export async function startTestServer(): Promise<TestContext> {
   // Reset in-memory state
   resetAuthState();
+  resetCockpitTokens();
+  resetCfAccessJwksCache();
   resetChannelState();
 
   // Init in-memory DB
@@ -38,6 +44,7 @@ export async function startTestServer(): Promise<TestContext> {
     baseUrl: `http://127.0.0.1:${port}`,
     adminToken: ADMIN_TOKEN,
     joinToken: JOIN_TOKEN,
+    cockpitToken: mintCockpitToken(),
     server,
   };
 }

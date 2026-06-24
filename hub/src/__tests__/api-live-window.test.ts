@@ -162,7 +162,10 @@ describe("GET /messages (history retrieval endpoint)", () => {
 describe("SSE live stream is unchanged by the windowing", () => {
   it("still delivers a new message over GET /events", async () => {
     const ac = new AbortController();
-    const evRes = await fetch(`${ctx.baseUrl}/events`, { signal: ac.signal });
+    const evRes = await fetch(`${ctx.baseUrl}/events`, {
+      headers: { Authorization: `Bearer ${ctx.cockpitToken}` },
+      signal: ac.signal,
+    });
     expect(evRes.status).toBe(200);
     const reader = evRes.body!.getReader();
     const decoder = new TextDecoder();

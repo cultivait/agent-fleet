@@ -58,14 +58,14 @@ describe("POST /kick-all", () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; kicked: string[] };
-    expect(body.kicked).not.toContain("operator");
+    expect(body.kicked).not.toContain("Operator");
     expect(body.kicked).toContain("ka-agent1");
     expect(body.kicked).toContain("ka-agent2");
 
     // Verify operator is still registered
     const usersRes = await fetch(`${ctx.baseUrl}/users`);
     const usersBody = (await usersRes.json()) as { users: { name: string }[] };
-    expect(usersBody.users.map((u) => u.name)).toContain("operator");
+    expect(usersBody.users.map((u) => u.name)).toContain("Operator");
   });
 });
 

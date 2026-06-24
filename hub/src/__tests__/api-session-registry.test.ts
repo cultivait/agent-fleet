@@ -248,6 +248,31 @@ describe("presence reconciliation on terminal status (option b)", () => {
     expect((await getBoardRow("linux-gggg"))?.status).toBe("signed-off");
   });
 
+  // AF_DISABLE_REAP path: the auto crash-sweep passes retirePresence=false, so a
+  // proven-dead session DIMS (board honest) but is NOT removed — only a manual /kick
+  // evicts. Mirrors the hard-retire test above with the inverse roster assertion.
+  it("DIMS but KEEPS the roster member when reaping is disabled (reapCrashedSessions(false))", async () => {
+    const child = spawn("sleep", ["60"]);
+    const deadPid = child.pid as number;
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+
+    await registerUser(ctx, "linux-noreap");
+    await register({ session_id: "sid-NR", spawn_id: "rid-NR", callsign: "linux-noreap", pid: deadPid });
+    await boardUpdate({ name: "linux-noreap", sid: "sid-NR", status: "active" });
+    expect(await isOnRoster("linux-noreap")).toBe(true);
+
+    const crashed = reapCrashedSessions(false); // the AF_DISABLE_REAP sweep path
+    expect(crashed).toContain("sid-NR");
+
+    // registry row IS marked crashed (board stays honest)...
+    expect((await listRegistry()).find((e) => e.session_id === "sid-NR")?.status).toBe("crashed");
+    // ...but the member is NOT removed — present on the roster, just dimmed offline.
+    const me = (await listUsers()).find((u) => u.name === "linux-noreap");
+    expect(me).toBeDefined();
+    expect(me?.online).toBe(false);
+  });
+
   it("is a safe no-op when the signed_off row's callsign was never on the roster", async () => {
     // a session killed before it ever radio_joined: registry row exists, no roster presence
     await register({ spawn_id: "rid-H", callsign: "linux-hhhh", node: "linux" });

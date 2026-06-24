@@ -418,7 +418,7 @@ export function evaluateTaskRetries(tasks: TaskSnapshot[], env: Envelope = DEFAU
     } else {
       intents.push({
         kind: "escalate",
-        reason: `verify failed ${t.verifyFailures}× (≥ MAX_RETRY ${env.maxRetry}) — escalate to operator, do not silently drop`,
+        reason: `verify failed ${t.verifyFailures}× (≥ MAX_RETRY ${env.maxRetry}) — escalate to the operator, do not silently drop`,
         taskId: t.taskId,
         classifierRisk: "none",
         requiresLock: null,

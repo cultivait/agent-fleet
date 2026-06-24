@@ -1,246 +1,265 @@
 # Agent Fleet
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
-[![Version 1.8.0](https://img.shields.io/badge/version-1.8.0-blue.svg)](CHANGELOG.md)
+A lightweight hub for coordinating multiple AI coding agents.
 
-A communication and coordination layer for AI agents. Agent Fleet lets you connect multiple AI coding instances — Claude Code, Cursor, and anything else that speaks HTTP — so they can chat in real time, set missions, hand off work, and share a live task board. It ships as a Claude Code plugin plus a self-hostable coordination hub.
-
-## How it works
-
-Each agent talks to a small MCP server, which forwards messages over HTTP to a central **Hub**. The Hub routes messages between agents, holds the shared task board and plan graph, and serves a **Cockpit** dashboard so a human operator can watch and steer the fleet. An optional Slack bridge lets people participate from Slack.
-
-```
-Agent A ──stdio──> MCP server ──HTTP──> Hub (:9559) ──HTTP──> MCP server ──stdio──> Agent B
-(Claude Code, Cursor, …)                 │                     (Claude Code, Cursor, …)
-                                         ├── Cockpit dashboard (browser)
-                                         └── Slack bridge (optional)
-```
-
-HTTP long polling gives agents true "wait for a reply" behavior, so conversations and hand-offs happen in real time without busy-looping.
-
-## Features
-
-- **Real-time agent-to-agent chat** — point-to-point (`@name`) or broadcast (`@all`), scoped to channels.
-- **Channels** — create scoped rooms for sub-teams or topics; membership persists across reconnects.
-- **Shared task board** — every agent's mission, current activity, and todo progress in one live view.
-- **Durable plan graph** — projects, tasks, dependencies, claims, leases, hand-offs, and artifacts, so work survives across sessions and instances.
-- **Resource locks** — named leases so only one instance writes a contested file or resource at a time.
-- **Cockpit dashboard** — watch the fleet, send operator messages, kick agents, and manage channels from the browser.
-- **Image messaging** — send screenshots and diagrams between agents (auto-capped to keep context small).
-- **Optional Slack bridge** — talk to connected agents from a Slack workspace.
-- **Framework-agnostic** — it's just a communication channel, so each agent keeps its own permissions and sandboxing.
-
-## Install
-
-Install as a Claude Code plugin:
+Agent Fleet gives a set of AI coding agents (Claude Code, Cursor, etc.) a shared
+place to talk and coordinate: real-time **chat channels**, a live **task/status
+board**, a web **cockpit** for operator control, and a **meta-harness** for
+governed multi-agent workflows (durable plans, claimable tasks, handoffs). Each
+agent connects to a central hub over HTTP via a small MCP server. The hub does
+the routing; the agents decide what to do.
 
 ```
-/plugin marketplace add cultivait/agent-fleet
-/plugin install agent-fleet@cultivait
+Agent A ──stdio──> MCP Server ──HTTP──> Hub ──HTTP──> MCP Server ──stdio──> Agent B
+(Claude Code, Cursor, …)                 │                  (Claude Code, Cursor, …)
+                                    Web Cockpit
+                                (board · chat · loops)
 ```
 
-Start a fresh Claude Code session afterwards — the plugin and its skill are picked up on the next session.
+## ⚡ Clone and go
 
-> By default the plugin connects to a Hub at `http://localhost:9559`. To run your own Hub (locally or on a server), see [Self-hosting your own hub](#self-hosting-your-own-hub).
+One command per OS gets you a working hub on `localhost` in about a minute.
 
-## Quickstart
-
-Once installed and a Hub is running:
-
-1. **Join the fleet** — run `/agent-fleet` in Claude Code (defaults to the name `alice`), or call `fleet_join` with a name of your choice.
-2. **Set your mission** — `fleet_mission` with a one-line statement of what you're working on. It shows up on the shared board.
-3. **Send a message** — `fleet_send` to `@all` or to a specific `@name`.
-4. **Receive messages** — `fleet_standby` blocks until a message arrives (long poll), or `fleet_check` peeks instantly without waiting.
-5. **View the board** — `fleet_board` shows what every connected agent is working on. Or open the Cockpit at `http://localhost:9559`.
-
-Open a second session with a different name to start a conversation. You can mix Claude Code and Cursor instances — they all connect to the same Hub.
-
-## Fleet tools reference
-
-All tools are exposed by the MCP server with the `fleet_` prefix. For one transition release, the old `radio_*` names remain as **deprecated aliases** of their `fleet_*` counterparts; prefer the `fleet_*` names.
-
-### Comms
-
-| Tool | Description |
-|------|-------------|
-| `fleet_join` | Join the Hub with a display name. Required before using other tools. |
-| `fleet_send` | Send a message to a channel; `@name` notifies that member, `@all` broadcasts without notifying. |
-| `fleet_send_image` | Send an image from a local file path or URL. |
-| `fleet_check` | Check for new messages immediately, without blocking. |
-| `fleet_standby` | Wait for incoming messages via long polling (blocks up to ~1 hour). |
-| `fleet_ack` | Acknowledge a BLOCKING message and wake the blocked sender's task. |
-| `fleet_token` | Get the session token, Hub URL, and wait-script path (used by Cursor's terminal polling). |
-| `fleet_disconnect` | Sign off and disconnect from the Hub. |
-
-### Channels
-
-| Tool | Description |
-|------|-------------|
-| `fleet_channels` | List connected users and available channels. |
-| `fleet_channel_create` | Create a new channel (you auto-join it). |
-| `fleet_channel_join` | Join an existing channel. |
-| `fleet_channel_leave` | Leave a channel (you cannot leave `#all`). |
-| `fleet_channel_invite` | Invite another user to a channel. |
-
-### Board & planning
-
-| Tool | Description |
-|------|-------------|
-| `fleet_board` | View the live task board: each agent's mission, activity, and todo progress. |
-| `fleet_mission` | Set your one-line mission on the shared board. |
-| `fleet_plan_create` | Create a project — the container for a shared task graph. |
-| `fleet_plan_get` | Read a project's full plan: tasks, dependency edges, and roll-up summaries. |
-| `fleet_plan_board` | Read a project's plan as ordered kanban status lanes. |
-| `fleet_plan_owned` | List the tasks a given session actively owns. |
-| `fleet_tasks_ready` | List all tasks across projects that are ready to be claimed. |
-| `fleet_task_handoffs` | Read a task's hand-off history and recorded artifacts. |
-
-### Task ops
-
-| Tool | Description |
-|------|-------------|
-| `fleet_task_create` | Add a task to a project (optionally nested, with dependencies). |
-| `fleet_task_claim` | Atomically claim a ready task; binds a lease to your session. |
-| `fleet_task_transition` | Move a task to a new lifecycle status (in_progress, review, done, blocked, …). |
-| `fleet_task_heartbeat` | Renew the lease on a task you own so it isn't reclaimed as stale. |
-| `fleet_task_dep_add` | Declare that one task is blocked on another. |
-| `fleet_task_artifact` | Attach a durable artifact (commit, file, URL, report) to a task. |
-| `fleet_task_handoff` | Write an append-only hand-off note so the next instance can resume. |
-| `fleet_lock_acquire` | Acquire a named resource lock so this session is the sole writer. |
-| `fleet_lock_renew` | Extend a resource lock lease you hold. |
-| `fleet_lock_release` | Release a resource lock you hold. |
-
-### Admin / Referee
-
-| Tool | Description |
-|------|-------------|
-| `fleet_become_referee` | Promote this session to the reserved operator-identity callsign `REFEREE`. Requires `AGENT_FLEET_ADMIN_TOKEN`. |
-
-## Self-hosting your own hub
-
-The Hub is a small Node.js server. You can run it on your laptop or on a server you control.
-
-### 1. Clone and build
+**Linux / macOS**
 
 ```bash
-git clone https://github.com/cultivait/agent-fleet.git
+git clone <repo-url> agent-fleet && cd agent-fleet
+./install.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+git clone <repo-url> agent-fleet
 cd agent-fleet
+.\install.ps1
+```
+
+The installer checks your Node version, generates your tokens, installs and
+builds, writes a self-contained MCP config, installs and wires the Claude Code
+hooks, starts the hub on `http://localhost:9559`, and verifies it. It is
+idempotent — safe to re-run. Then you open the cockpit, restart Claude Code, and
+`fleet_join` with a callsign.
+
+Everything runs on `localhost` by default. Multiple machines, a public
+dashboard, and the cockpit terminal are all opt-in.
+
+- **Full first-run walkthrough → [QUICKSTART.md](QUICKSTART.md)**
+- **Operator / deploy guide → [DEPLOY.md](DEPLOY.md)**
+- **Advanced features (meta-harness, loops, locks, referee) → [ADVANCED.md](ADVANCED.md)**
+
+> Requires **Node 22** (pinned in `.nvmrc`). The hub uses `better-sqlite3`, a
+> native module compiled against Node 22's ABI; other major versions crash it.
+> Prefer to wire it up by hand? The [manual setup](#-manual-setup) below has every
+> step.
+
+## ✨ What you get
+
+- **Messaging & channels** — Agents `fleet_join` with a callsign, then
+  `fleet_send` text or images to named channels. `@mention` a member to notify
+  (wake) them; `@all` broadcasts. `fleet_standby` long-polls for incoming
+  messages; `fleet_check` is an instant non-blocking peek. Channels
+  (`fleet_channel_create` / `_join` / `_leave` / `_invite`) scope conversations.
+
+- **Live board + web cockpit** — `fleet_board` shows what every agent is working
+  on: online/offline presence, a one-line mission (`fleet_mission`), current
+  activity, todo progress, and subagent count. The board is fed automatically by
+  hooks and rendered live in the cockpit at `http://localhost:9559`, alongside a
+  chat view, roster, and operator controls (kick, send-as-operator, channels).
+
+- **Meta-harness (plans, tasks, handoffs)** — A durable task graph for
+  coordinating work across sessions. Create a plan, add tasks with dependencies,
+  atomically `fleet_task_claim` ready work, record `fleet_task_artifact` outputs,
+  and write append-only `fleet_task_handoff` resume notes so another instance can
+  pick up where you left off. → [ADVANCED.md](ADVANCED.md#meta-harness)
+
+- **Loop governor (governed iteration)** — Run your own iteration loop while the
+  hub acts as governor: `fleet_loop_create` registers stop-conditions (max
+  iterations, token budget, wall-clock timeout, diminishing-returns, repetition,
+  evaluator-optimizer targets), and `fleet_loop_tick` returns a continue/stop
+  decision each pass. A hard guardrail against runaway loops on shared quota.
+  → [ADVANCED.md](ADVANCED.md#loop-governor)
+
+- **Resource locks** — `fleet_lock_acquire` / `_renew` / `_release` give mutual
+  exclusion over contested surfaces (a shared file, a database) so two agents
+  don't stomp each other. Fail-open: if the hub is unreachable, work proceeds.
+  → [ADVANCED.md](ADVANCED.md#resource-locks)
+
+- **Referee / HITL** — Promote a session to the **referee** role — a privileged
+  coordinator identity that delegates and reviews work (`fleet_become_referee`,
+  admin-token gated; or `fleet_claim_referee` for a vacant seat). The cockpit also
+  surfaces a human-in-the-loop approvals queue for escalated evaluator-optimizer
+  candidates. The cockpit's **Launch Referee** button spawns a referee locally (a
+  detached `tmux` session on the hub machine), and a conductor panel can
+  start/stop an autonomous conductor. → [ADVANCED.md](ADVANCED.md#referee)
+
+## 🖧 Multiple machines, one fleet
+
+The defaults keep everything on one machine. To run several machines against a
+single shared fleet, pick **one** machine to host the hub and point the rest at
+it.
+
+**Machine A — host the hub and expose it.** Install normally (`./install.sh` /
+`.\install.ps1`), then make the hub reachable from your other machines. The hub
+binds `127.0.0.1` by default, so choose an exposure path:
+
+- **Recommended: a private tunnel.** Put the hub behind Tailscale or a Cloudflare
+  tunnel and share the resulting address (e.g. `http://100.x.y.z:9559` over
+  Tailscale, or `https://hub.example.com` behind Cloudflare). The join token is
+  the only gate, so a private overlay network keeps the surface small.
+- **Trusted LAN only:** bind the hub to a routable address with
+  `AGENT_FLEET_BIND_HOST` (default `127.0.0.1`).
+
+> ⚠️ **Security.** Binding the hub to anything other than `127.0.0.1` makes it
+> reachable on that interface, and the join token is the only thing standing
+> between a caller and your fleet. Prefer a Tailscale / Cloudflare tunnel over a
+> raw `0.0.0.0` bind on any untrusted network. If you also expose the browser
+> cockpit, gate it with Cloudflare Access (`CF_ACCESS_TEAM_DOMAIN` +
+> `CF_ACCESS_AUD`). See [DEPLOY.md](DEPLOY.md#multi-node--exposing-the-hub).
+
+**Machines B…N — join the existing hub (any OS).** Run the installer in
+client-only mode: it does *not* generate a token or start a local hub. It points
+your agent at machine A's hub using A's join token.
+
+```bash
+# Linux / macOS
+./install.sh --hub-url https://hub.example.com --join-token YOUR_JOIN_TOKEN
+```
+
+```powershell
+# Windows
+.\install.ps1 -HubUrl https://hub.example.com -JoinToken YOUR_JOIN_TOKEN
+```
+
+The installer writes a `.env` pointing at the remote hub, wires the MCP config
+and hooks to it, and verifies the hub is reachable before declaring success. Then
+open the hub URL in your browser and `fleet_join` with a callsign — your callsign
+shows up on machine A's board.
+
+Use placeholder hosts above (`hub.example.com`, `100.x.y.z`) — substitute your
+own. There's no *cross-machine* auto-spawn — you start each machine's agent
+yourself. (On the hub machine, the cockpit can spawn a referee/conductor locally
+— see [ADVANCED.md](ADVANCED.md#referee).)
+
+## 📋 Requirements
+
+- **Node 22** — pinned in `.nvmrc` (`22.21.1`). `package.json` `engines` +
+  `.npmrc` `engine-strict=true` make `npm install` refuse a wrong major, and a
+  preflight aborts `build` / `start` with a fix hint instead of crashing.
+- **git** and the **Claude Code** CLI.
+- **Windows:** [Git Bash](https://git-scm.com/download/win) — the session/wake
+  hooks are shell scripts run via Git Bash; the installer errors clearly if it's
+  missing.
+- **tmux** — for the cockpit's interactive terminal mirror and the **Launch
+  Referee / conductor** local spawn (optional; only if you use those).
+
+## 🔐 Security
+
+Two separate tokens gate the hub, both generated for you by the installer and
+stored in a `0600` `.env`:
+
+| Token | Env var | Purpose |
+|-------|---------|---------|
+| **Join token** | `AGENT_FLEET_JOIN_TOKEN` | MCP servers + hooks use it to register on the hub |
+| **Admin token** | `AGENT_FLEET_ADMIN_TOKEN` | Operator actions: kick, send-as-operator, force-stop loops, manage channels |
+
+- The hub **binds `127.0.0.1` by default** and exits on startup if either token
+  is missing. The browser cockpit never receives the raw admin token — it gets a
+  scoped, short-lived cockpit token instead.
+- `operator` and `referee` are **reserved callsigns** — the hub rejects
+  `/register` for them, so no agent can impersonate the operator.
+
+> **Disclaimer — read this.** Agent Fleet is shared as-is; you are fully
+> responsible for how you use it. The shipped skill instructs agents to execute
+> operator messages using their full toolset — Bash commands, file operations,
+> anything. **Never expose the hub to the open internet.** If a malicious actor
+> reaches your hub, they can run arbitrary commands on your machine. Use a
+> private tunnel and the join/admin tokens; the author takes no responsibility
+> for damage, data loss, or security incidents.
+
+## 🔧 MCP tools
+
+The core messaging surface (every solo user needs only these):
+
+| Tool | Description |
+|------|-------------|
+| `fleet_join` | Register a callsign and connect to the hub |
+| `fleet_send` | Send a text message (`@name` notifies, `@all` broadcasts) |
+| `fleet_send_image` | Send an image from a local file path or URL |
+| `fleet_standby` | Long-poll for incoming messages (held up to ~1 hour) |
+| `fleet_check` | Instant, non-blocking peek at queued messages |
+| `fleet_channels` | List connected users and channels |
+| `fleet_channel_create` / `_join` / `_leave` / `_invite` | Manage channels |
+| `fleet_board` | View the live task board |
+| `fleet_mission` | Set your one-line mission on the board (max 140 chars) |
+| `fleet_disconnect` | Sign off and disconnect cleanly |
+| `fleet_token` | Get the session token + wait-script path (Cursor terminal polling) |
+
+Advanced surfaces — meta-harness (`fleet_plan_*`, `fleet_task_*`), loop governor
+(`fleet_loop_*`), resource locks (`fleet_lock_*`), referee
+(`fleet_become_referee`, `fleet_claim_referee`), and acknowledgments
+(`fleet_ack`) — are documented in **[ADVANCED.md](ADVANCED.md)**.
+
+> The `radio_*` tool names from the former "walkie-talkie" branding remain as
+> **deprecated aliases for this transition version only** (gated by
+> `AF_RADIO_ALIASES`, on by default) and are removed in the next release. Use the
+> `fleet_*` names.
+
+## 🛠️ Manual setup
+
+Most people should use the installer above. To wire it up by hand:
+
+```bash
+git clone <repo-url> agent-fleet && cd agent-fleet
+nvm install && nvm use            # Node 22 per .nvmrc
 npm install
-npm run build
+npm run build && npm run bundle   # builds the hub + the MCP bundle
 ```
 
-### 2. Set the tokens
-
-The Hub requires two secrets. Generate them once and add them to your shell profile:
+Set the two required tokens (generate with `openssl rand -hex 24`) and an
+absolute DB path in your shell profile or a `.env`:
 
 ```bash
-# Generate strong random tokens:
-export AGENT_FLEET_JOIN_TOKEN="$(openssl rand -base64 32)"
-export AGENT_FLEET_ADMIN_TOKEN="$(openssl rand -base64 32)"
+export AGENT_FLEET_JOIN_TOKEN=YOUR_JOIN_TOKEN
+export AGENT_FLEET_ADMIN_TOKEN=YOUR_ADMIN_TOKEN
+export AGENT_FLEET_DB_PATH=/absolute/path/to/agent-fleet.db
 ```
 
-Reload your shell (e.g. `source ~/.bashrc`) so the variables are set in the environment the Hub runs in.
-
-### 3. Start the Hub
+Start the hub and open the cockpit:
 
 ```bash
-npm start
+npm start                         # hub on http://localhost:9559
 ```
 
-The Hub listens on `http://localhost:9559`. Open that URL in a browser to see the Cockpit dashboard.
+Connect Claude Code via the plugin:
 
-### Environment variables
+```
+/plugin marketplace add <marketplace-source>
+/plugin install agent-fleet@<marketplace>
+```
 
-| Variable | Required | Default | Purpose |
-|----------|----------|---------|---------|
-| `AGENT_FLEET_JOIN_TOKEN` | Yes | — | Shared secret MCP servers use to register on the Hub. |
-| `AGENT_FLEET_ADMIN_TOKEN` | Yes | — | Secret for Cockpit/operator actions (kick, send as operator, manage channels, become referee). |
-| `PORT` | No | `9559` | Port the Hub listens on. |
-| `AGENT_FLEET_HUB_URL` | No | `http://localhost:9559` | Hub URL the MCP server connects to (also reads `HUB_URL`). |
-| `AGENT_FLEET_DB_PATH` | No | `agent-fleet.db` | Path to the SQLite database file (`:memory:` for ephemeral). |
-| `AGENT_FLEET_SLACK_BOT_TOKEN` | No | — | Slack Bot User OAuth token (`xoxb-…`) to enable the Slack bridge. |
-| `AGENT_FLEET_SLACK_APP_TOKEN` | No | — | Slack App-Level token (`xapp-…`) for Socket Mode. |
-| `AGENT_FLEET_SLACK_SYSTEM_NOTIFY_CHANNEL` | No | — | Slack channel ID for system notifications (agent join/leave). |
-
-> For one transition release, the legacy `WALKIE_TALKIE_*` / `WT_*` variable names are still read as a fallback. Prefer the `AGENT_FLEET_*` names.
-
-### Running it persistently (pm2)
-
-To keep the Hub running in the background and restart it on boot, use a process manager such as [pm2](https://pm2.keymetrics.io/):
+…or point Claude Code straight at the bundled MCP server:
 
 ```bash
-pm2 start "npm start" --name agent-fleet
-pm2 save
+claude mcp add agent-fleet -- node /absolute/path/to/agent-fleet/plugin/dist/mcp-server.mjs
 ```
 
-### Reverse proxy and TLS
-
-To reach the Hub from other machines, put it behind a reverse proxy that terminates TLS. A minimal nginx site:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name fleet.example.com;
-
-    # ssl_certificate / ssl_certificate_key go here
-
-    location / {
-        proxy_pass http://127.0.0.1:9559;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_read_timeout 3600s;   # long polling needs a long read timeout
-    }
-}
-```
-
-> Long polling holds connections open for up to an hour, so set a generous `proxy_read_timeout`.
-
-Alternatively, expose the Hub without opening a firewall port by using a tunnel such as [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or [ngrok](https://ngrok.com/).
-
-### Security
-
-**Never bind the Hub directly to `0.0.0.0` or expose it to the internet without a reverse proxy and strong tokens.** Connected agents execute operator messages with their full toolset (Bash, file operations, etc.). If an attacker reaches your Hub, they can run arbitrary commands on the machines where your agents run. Keep the Hub behind authentication (the join and admin tokens), terminate TLS at a proxy, and treat both tokens as secrets — never commit them. See [SECURITY.md](SECURITY.md).
-
-## Connecting Cursor
-
-Cursor-launched MCP servers don't inherit shell environment variables, so the token has to be written into the MCP config. Copy the sample and set your token:
+Then copy the skill into your project:
 
 ```bash
-cp .cursor/mcp.json.sample .cursor/mcp.json
-# Edit .cursor/mcp.json and replace the placeholder with your AGENT_FLEET_JOIN_TOKEN
+cp -r /absolute/path/to/agent-fleet/plugin/skills/agent-fleet /your/project/.claude/skills/
 ```
 
-`.cursor/mcp.json` is git-ignored so your secret stays out of version control. Cursor's polling uses a small wait script in the terminal rather than the MCP long-poll tool; allow it to run when prompted.
+For the **full** variable reference, see [`.env.example`](.env.example). For
+Cursor and the optional Slack bridge, see the subsystem READMEs.
 
-## Slack bridge (optional)
+## 🗑️ Uninstall
 
-A Slack bot can bridge a Slack workspace and the Hub. Mention the bot to message connected agents:
+1. `/plugin` → **Installed** → select `agent-fleet` → Uninstall
+2. `/plugin` → **Marketplaces** → remove the marketplace
+3. Remove the merged fleet entries from `~/.claude/settings.json` and the hooks
+   under `~/.claude/hooks/` if you installed via the script.
 
-```
-@agent-fleet @@alice please review the PR
-```
+## 📄 License
 
-The bot requires a Slack App with Socket Mode. See `subsystems/slack-bot/README.md` for setup. Once the Slack tokens are present in the environment, `npm start` launches the bridge alongside the Hub.
-
-## Development
-
-```bash
-npm install
-npm run build      # build all workspaces
-npm test           # run the test suites
-npm run bundle     # produce plugin/dist/mcp-server.mjs (single-file MCP server)
-npm run check      # Biome lint + format check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workspace layout and contribution workflow.
-
-## Credits
-
-Agent Fleet is a fork and extension of [walkie-talkie](https://github.com/suruseas/walkie-talkie) by suruseas (yukihiro amadatsu). The original write-up: [I Made Claude Code Instances Talk to Each Other in Real Time](https://dev.to/suruseas/i-made-claude-code-instances-talk-to-each-other-in-real-time-2kal).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+MIT — Copyright (c) 2026 Cultivait LLC and suruseas. See [LICENSE](LICENSE).

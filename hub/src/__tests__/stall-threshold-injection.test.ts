@@ -10,8 +10,10 @@ import { getDashboardHTML } from "../dashboard.js";
 // into the shipped browser JS) and that every emitted copy equals the canonical value —
 // i.e. the four-way drift this ticket removes can't silently reappear.
 describe("C5/Wave-4 (c) — stall threshold single source of truth", () => {
-  it("canonical default is 240000ms (240s)", () => {
-    expect(STALL_BEAT_MS).toBe(240000);
+  it("canonical default is 3600000ms (3600s / 1h), env-tunable via AF_STALL_BEAT_SECONDS", () => {
+    // This deployment defaults the stall radar to 1h to keep the cockpit quiet for
+    // long-lived agent sessions (constants.ts; upstream general default is 240s).
+    expect(STALL_BEAT_MS).toBe(3_600_000);
   });
 
   it("cockpit-ui browser script injects the canonical value with no literal ${} leak", () => {

@@ -2,24 +2,15 @@
 
 ## v1.8.0 (2026-06-19)
 
-First public release as **Agent Fleet** — a fork and extension of [walkie-talkie](https://github.com/suruseas/walkie-talkie) by suruseas. This release rebrands the project, adds a shared task board and durable plan graph for coordinating multiple agents, and renames the tools and environment variables.
-
 ### Breaking — Rename: Walkie-Talkie → Agent Fleet
-The project, plugin/MCP server, tools, hub process, database, config dir, env vars, and skills are renamed from the "walkie-talkie"/"radio" brand to **Agent Fleet** / "fleet".
+The project, plugin/MCP server, tools, hub process, database, config dir, env vars, public URL, hooks, and skills are renamed from the "walkie-talkie"/"radio" brand to **Agent Fleet** / "fleet".
 
 - **Tools:** `radio_*` → `fleet_*` (e.g. `radio_join`→`fleet_join`, `radio_over`→`fleet_send`, `radio_out`→`fleet_disconnect`, `radio_standby`→`fleet_standby`). The `radio_*` names are retained as **deprecated aliases for this transition version only** and are removed in the next release.
 - **Plugin / MCP server / npm packages:** `walkie-talkie` → `agent-fleet`, `@walkie-talkie/*` → `@agent-fleet/*`.
 - **Env vars:** `WALKIE_TALKIE_*`/`WT_*` → `AGENT_FLEET_*`/`AF_*`. The old names are still read as a fallback for back-compat this transition version.
-- **Process / data:** hub process → `agent-fleet-hub`; database `walkie-talkie.db` → `agent-fleet.db` (the old file is copied over on first boot if only it exists); config dir `~/.config/walkie-talkie` → `~/.config/agent-fleet`.
-- **UI:** Cockpit dashboard title → "Agent Fleet".
+- **Process / data:** hub `walkie-talkie-hub` → `agent-fleet-hub`; tunnel `walkie-tunnel-win` → `agent-fleet-tunnel-win`; database `walkie-talkie.db` → `agent-fleet.db` (the old file is copied over on first boot if only it exists); config dir `~/.config/walkie-talkie` → `~/.config/agent-fleet`.
+- **URL / UI:** your public cockpit URL moves from the old `radio` host to the new `fleet` host; cockpit title → "Agent Fleet".
 - **Skills:** `/walkie-talkie` → `/agent-fleet`; `radio-board` → `fleet-board`.
-
-### Features
-- Shared task board (`fleet_board`, `fleet_mission`) showing each agent's mission, activity, and todo progress.
-- Durable plan graph: projects, tasks, dependencies, claims/leases, hand-offs, and artifacts (`fleet_plan_*`, `fleet_task_*`).
-- Named resource locks (`fleet_lock_acquire`/`renew`/`release`) so one session is the sole writer of a contested resource.
-- `fleet_ack` to acknowledge a BLOCKING message and wake the blocked sender's task.
-- Cockpit dashboard for watching and steering the fleet.
 
 
 ## v1.7.0 (2026-03-09)

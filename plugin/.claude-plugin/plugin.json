@@ -1,8 +1,7 @@
 {
   "name": "agent-fleet",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "description": "A lightweight communication layer for AI agents",
-  "author": { "name": "Cultivait LLC" },
   "mcpServers": {
     "agent-fleet": {
       "command": "node",

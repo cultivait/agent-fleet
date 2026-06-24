@@ -1,0 +1,9 @@
+{
+  "_comment": "GENERATED at runtime by fleet.mjs (writeFleetMcpConfig) on every `fleet up`. The agent-fleet MCP server path is resolved dynamically from the installed plugin; this checked-in copy is a placeholder and is overwritten before any spawn.",
+  "mcpServers": {
+    "agent-fleet": {
+      "command": "node",
+      "args": ["${AGENT_FLEET_PLUGIN_DIR}/dist/mcp-server.mjs"]
+    }
+  }
+}

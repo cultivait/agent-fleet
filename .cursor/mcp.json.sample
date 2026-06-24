@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "walkie-talkie": {
+    "agent-fleet": {
       "command": "node",
       "args": ["plugin/dist/mcp-server.mjs"],
       "env": {
-        "WALKIE_TALKIE_JOIN_TOKEN": "your-secret-value-here",
-        "HUB_URL": "http://localhost:9559"
+        "AGENT_FLEET_JOIN_TOKEN": "your-secret-value-here",
+        "AGENT_FLEET_HUB_URL": "http://localhost:9559"
       }
     }
   }

@@ -1,9 +1,8 @@
 {
   "name": "@agent-fleet/mcp-server",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
-  "license": "MIT",
   "bin": {
     "agent-fleet-mcp": "./dist/index.js"
   },

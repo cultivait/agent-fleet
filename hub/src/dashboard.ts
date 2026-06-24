@@ -1,7 +1,21 @@
-import { cockpitStyles, cockpitMarkup, cockpitScript } from "./cockpit-ui.js";
+import { cockpitMarkup, cockpitScript, cockpitStyles } from "./cockpit-ui.js";
 import { STALL_BEAT_MS } from "./constants.js";
 
-export function getDashboardHTML(adminToken: string): string {
+// `cockpitToken` is the SCOPED cockpit token (A3-a), minted per request on an
+// authenticated GET /. It is embedded in BOTH browser scripts (the dashboard
+// script below + the threaded cockpitScript) in place of the raw admin token —
+// the raw admin token must never reach the browser. The hub accepts this scoped
+// token on the admin routes the cockpit calls. The parameter is still a plain
+// string threaded verbatim, so the existing injection tests are unaffected.
+//
+// `operatorName` is the configured persistent operator identity. It is injected
+// into the client script (window.__AF_OPERATOR__) so the dashboard can tag the
+// operator's messages without hardcoding a name. Defaults to the same env-driven
+// value server.ts resolves (AF_OPERATOR_NAME ?? WT_OPERATOR_NAME ?? "Operator").
+export function getDashboardHTML(
+  cockpitToken: string,
+  operatorName: string = (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator",
+): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,7 +25,7 @@ export function getDashboardHTML(adminToken: string): string {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ===== brand-forward / quiet-modern theme =====
+  /* ===== Quiet-modern theme =====
      Paper & ink. Moss is the resting "all-good" accent; burnt orange (--action)
      is the ONLY loud note, spent solely where a human is genuinely needed.
      Whitespace is the texture — hairline rules + paper/white tonal steps, no
@@ -73,6 +87,26 @@ export function getDashboardHTML(adminToken: string): string {
     position: relative;
     z-index: 50;
   }
+
+  /* Active-terminal label on the main header: shows "▶ <callsign> terminal · <status>"
+     while a terminal takeover is open, cleared on close (set by openTerminal/closeTerminal
+     in cockpit-ui.ts). The terminal panel has no header of its own. */
+  .term-active-label {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-text);
+    background: var(--accent-soft);
+    padding: 4px 11px;
+    border-radius: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 44vw;
+  }
+  .term-active-label.active { display: inline-flex; }
   /* Mobile drawer toggles (hidden on desktop) */
   .mobile-toggle {
     display: none;
@@ -150,21 +184,6 @@ export function getDashboardHTML(adminToken: string): string {
     box-shadow: 0 0 6px var(--red);
   }
   .header-spacer { flex: 1; }
-  #channel-header {
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .channel-members {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-tertiary);
-    font-weight: 400;
-  }
   .clear-btn, .filter-btn {
     font-family: var(--mono);
     font-size: 11px;
@@ -599,6 +618,7 @@ export function getDashboardHTML(adminToken: string): string {
   /* Messages */
   #messages {
     flex: 1;
+    min-height: 0; /* bound the scroll region within .message-area (don't rely on overflow→auto min-height inference) */
     overflow-y: auto;
     padding: 16px 24px;
     display: flex;
@@ -667,6 +687,17 @@ export function getDashboardHTML(adminToken: string): string {
     border-color: var(--accent-border);
     border-left-color: var(--accent-text);
   }
+  /* REFEREE / principal-non-operator messages: faded terracotta (Tint B), mirrors operator's moss */
+  .msg.referee {
+    background: rgba(181,88,47,0.09);
+    border-color: rgba(181,88,47,0.24);
+    border-left: 3px solid #B5582F;
+  }
+  .msg.referee:hover {
+    border-color: rgba(181,88,47,0.45);
+    border-left-color: #9A4A28;
+  }
+  .msg.referee .from { color: #9A4A28; }
   .msg.system {
     background: transparent;
     font-size: 15px;
@@ -707,7 +738,14 @@ export function getDashboardHTML(adminToken: string): string {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0; /* let #messages own the scroll region (flex item default min-height:auto would grow the column to fit all messages, so the page/container scrolls and selectChannel's scrollBottom() no-ops) */
+    position: relative; /* anchor the in-place terminal takeover (.ck-term-overlay) */
   }
+
+  /* On-Air roster: a LIVE callsign is a click target that opens its read-only
+     terminal in place of the chat. Offline rows stay plain (no session to mirror). */
+  .user-name.term-open { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+  .user-name.term-open:hover { color: var(--accent-text); }
 
   /* Input bar */
   .input-bar {
@@ -1207,7 +1245,6 @@ export function getDashboardHTML(adminToken: string): string {
 
     header { padding: 0 12px; gap: 10px; }
     .header-sep { display: none; }
-    #channel-header { display: none; }
 
     /* Sidebar + task board become off-canvas drawers */
     #sidebar, #task-board {
@@ -1264,6 +1301,28 @@ export function getDashboardHTML(adminToken: string): string {
     .msg { font-size: 15px; padding: 9px 12px; }
     .msg.system { font-size: 14px; }
     #messages { padding: 12px 10px; }
+
+    /* Composer relayout: on phones the channel (#all) + recipient (@all) chips
+       and the Send button share the textarea's flex row, all flex-shrink:0; the
+       field-sizing:content textarea is then the only thing that yields and
+       collapses to ~1ch. Re-lay the bar as a grid so the two chips sit on a
+       full top row and the textarea spans the whole second row (Send stays
+       beside it). Same DOM nodes — selectChannel()/setRecipient() keep them in
+       sync and the recipient ✕ stays clickable. Desktop (>540px) is untouched. */
+    .input-bar {
+      display: grid;
+      grid-template-columns: auto auto 1fr auto;
+      grid-template-areas:
+        "ctag rtag .     ."
+        "field field field send";
+      align-items: end;
+      column-gap: 8px;
+      row-gap: 8px;
+    }
+    #channel-tag       { grid-area: ctag; }
+    #recipient-tag     { grid-area: rtag; }
+    .input-bar-wrapper { grid-area: field; }
+    .send-btn          { grid-area: send; }
   }
   @media (min-width: 1440px) {
     /* Large desktop / fullscreen: the chatroom has width to spare, so widen the
@@ -1277,6 +1336,10 @@ export function getDashboardHTML(adminToken: string): string {
   }
   ${cockpitStyles()}
 </style>
+<!-- Vendored xterm.js (served from the hub, NO CDN) for the interactive terminal panel. -->
+<link rel="stylesheet" href="/vendor/xterm.css">
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
 </head>
 <body>
   <header>
@@ -1289,7 +1352,7 @@ export function getDashboardHTML(adminToken: string): string {
     </div>
     <div class="header-sep"></div>
     <span id="status">connected</span>
-    <span id="channel-header"></span>
+    <span id="term-active-label" class="term-active-label"></span>
     <div class="header-spacer"></div>
     <button class="mobile-toggle" id="board-toggle" aria-label="Toggle task board">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -1322,6 +1385,16 @@ export function getDashboardHTML(adminToken: string): string {
         </div>
         <button class="send-btn" id="send-btn">Send</button>
       </div>
+      <!-- Interactive terminal takeover: absolutely fills .message-area (chat
+           column), leaving the sidebar (channels + On-Air roster) and task board
+           in place. Bound by id from cockpit-ui.ts (openTerminal/closeTerminal). -->
+      <!-- No terminal-local chrome: the body fills the takeover. Active agent name +
+           status show on the MAIN header (#term-active-label); exit = channel-click or Esc. -->
+      <div class="ck-term-overlay" id="ck-term-overlay" aria-hidden="true">
+        <div class="ck-term-modal" role="region" aria-label="Agent terminal">
+          <div class="ck-term-body" id="ck-term-body"></div>
+        </div>
+      </div>
     </div>
     <div id="task-board">
       <span class="sidebar-label">Task Board</span>
@@ -1352,13 +1425,20 @@ export function getDashboardHTML(adminToken: string): string {
     </div>
   </div>
   <script>
-    const ADMIN_TOKEN = "${adminToken}";
+    // A3-a: this is the SCOPED cockpit token (minted per authenticated GET /),
+    // NOT the raw admin token. The hub accepts it on the admin routes the
+    // dashboard/cockpit call. Named ADMIN_TOKEN only for call-site continuity.
+    const ADMIN_TOKEN = "${cockpitToken}";
+    // The configured persistent operator identity, injected server-side. The
+    // dashboard tags messages from this name as the operator (instead of a
+    // hardcoded handle). Source: AF_OPERATOR_NAME ?? WT_OPERATOR_NAME ?? "Operator".
+    const OPERATOR_NAME = ${JSON.stringify(operatorName)};
+    window.__AF_OPERATOR__ = OPERATOR_NAME;
     const adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + ADMIN_TOKEN };
     const messagesEl = document.getElementById("messages");
     const userListEl = document.getElementById("user-list");
     const channelListEl = document.getElementById("channel-list");
     const statusEl = document.getElementById("status");
-    const channelHeaderEl = document.getElementById("channel-header");
     const users = new Map(); // name -> online (boolean)
     const channels = new Map(); // name -> { memberCount, createdBy, members }
     const typingUsers = new Map(); // name -> { timeoutId, channel }
@@ -1421,6 +1501,19 @@ export function getDashboardHTML(adminToken: string): string {
         const tu = typingUsers.get(u);
         const typingHtml = tu && tu.channel === selectedChannel ? '<span class="typing-indicator">typing...</span>' : '';
         info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + u + '</span>' + typingHtml;
+        // Live callsign → open its read-only terminal in place of the chat.
+        // openTerminal lives in the cockpit IIFE (window.__cockpit); it flips to
+        // Radio mode and reveals the takeover panel anchored in .message-area.
+        if (online) {
+          const nameSpan = info.querySelector(".user-name");
+          if (nameSpan) {
+            nameSpan.classList.add("term-open");
+            nameSpan.title = "Open terminal (read-only)";
+            nameSpan.onclick = () => {
+              if (window.__cockpit && window.__cockpit.openTerminal) window.__cockpit.openTerminal(u);
+            };
+          }
+        }
         const btn = document.createElement("button");
         btn.className = "kick-btn";
         btn.textContent = "kick";
@@ -1434,7 +1527,6 @@ export function getDashboardHTML(adminToken: string): string {
         const targetName = recipientTarget.slice(1);
         if (!users.has(targetName)) setRecipient("@all");
       }
-      updateChannelHeader();
     }
 
     function renderAgents() {
@@ -1509,7 +1601,6 @@ export function getDashboardHTML(adminToken: string): string {
           channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
         }
         renderChannels();
-        updateChannelHeader();
         // Channel membership just changed (join/leave/create) — re-render the
         // channel-scoped ON AIR roster so it reflects the active channel's members.
         renderUsers();
@@ -1537,31 +1628,6 @@ export function getDashboardHTML(adminToken: string): string {
       }
     }
 
-    function updateChannelHeader() {
-      if (!selectedChannel) {
-        channelHeaderEl.innerHTML = "";
-        return;
-      }
-      let membersHtml = "";
-      if (selectedChannel === "#all") {
-        const onlineUsers = [...users.keys()];
-        const count = onlineUsers.length;
-        const names = onlineUsers.join(", ");
-        membersHtml = count > 0
-          ? '<span class="channel-members">' + count + (count === 1 ? ' member' : ' members') + ': ' + names + '</span>'
-          : '<span class="channel-members">0 members</span>';
-      } else {
-        const chInfo = channels.get(selectedChannel);
-        const members = chInfo ? chInfo.members : [];
-        const count = members.length;
-        const names = members.join(", ");
-        membersHtml = count > 0
-          ? '<span class="channel-members">' + count + (count === 1 ? ' member' : ' members') + ': ' + names + '</span>'
-          : '<span class="channel-members">0 members</span>';
-      }
-      channelHeaderEl.innerHTML = '<span>' + selectedChannel + '</span> — ' + membersHtml;
-    }
-
     function markChannelRead(channel) {
       fetch("/admin-mark-read", {
         method: "POST",
@@ -1573,9 +1639,11 @@ export function getDashboardHTML(adminToken: string): string {
     }
 
     function selectChannel(name) {
+      // Picking a channel exits any open terminal takeover and restores that
+      // channel's chat. closeTerminal is a no-op when no terminal is open.
+      if (window.__cockpit && window.__cockpit.closeTerminal) window.__cockpit.closeTerminal();
       selectedChannel = name;
       channelTagEl.textContent = name || "#all";
-      updateChannelHeader();
       // Reset recipient if not a member of the new channel
       if (recipientTarget !== "@all" && name !== "#all") {
         const chInfo = channels.get(name);
@@ -1678,7 +1746,7 @@ export function getDashboardHTML(adminToken: string): string {
     }
 
     function buildMessageRow(msg) {
-      const cls = msg.from === "operator" ? "message operator" : "message";
+      const cls = msg.from === OPERATOR_NAME ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
       const channel = msg.channel || "#all";
       const channelTag = '<span class="channel-tag">' + channel + '</span>';
       const div = document.createElement("div");
@@ -1980,7 +2048,7 @@ export function getDashboardHTML(adminToken: string): string {
         if (targetName === "all") {
           const chInfo = channels.get(channel);
           const memberSet = (channel !== "#all" && chInfo) ? new Set(chInfo.members) : null;
-          for (const [u] of users) { if (u !== "operator" && (!memberSet || memberSet.has(u))) expectReply(u); }
+          for (const [u] of users) { if (u !== OPERATOR_NAME && (!memberSet || memberSet.has(u))) expectReply(u); }
         } else {
           expectReply(targetName);
         }
@@ -2126,7 +2194,7 @@ export function getDashboardHTML(adminToken: string): string {
 
     // Task board
     const boardCardsEl = document.getElementById("board-cards");
-    const boardEntries = new Map(); // name -> { name, node, status, mission, activity, todos, subagents, sid, updatedAt, online }
+    const boardEntries = new Map(); // name -> { name, node, status, mission, activity, todos, subagents, sid, updatedAt, online, lastSeenAt, stale, contextTokens, contextTs }
 
     // 3B: plan tasks each session currently holds, keyed by owner_sid (= board sid).
     // Joined onto cards in renderBoard; refreshed on plan_update + SSE reconnect.
@@ -2192,22 +2260,45 @@ export function getDashboardHTML(adminToken: string): string {
     }
 
     // WS2 context-gauge render thresholds (mirror the FROZEN consumer contract):
-    // OVER = the 400k absolute compaction trigger; WARN = 80% of it. STALE_MS =
-    // how long without a fresh context_ts before the reading is greyed (frozen).
-    // Color is by ABSOLUTE tokens, never %; grey is by ts-liveness, never value.
+    // OVER = the 400k absolute compaction trigger / context limit (the cockpit gauge's
+    // 100% fill ceiling); RED = 360k red band (fires BEFORE the compact line for early
+    // warning); WARN = 300k yellow band. STALE_MS = how long without a fresh context_ts
+    // before the reading is greyed (frozen). Color is by ABSOLUTE tokens, never %; grey
+    // is by ts-liveness, never value. Kept identical to cockpit-ui.ts.
     const CONTEXT_OVER = 400000;
-    const CONTEXT_WARN = 320000;
+    const CONTEXT_RED = 360000;
+    const CONTEXT_WARN = 300000;
     const CONTEXT_STALE_MS = 120000;
+
+    // Roster render guard (item 3): an agent that is offline AND hasn't been seen
+    // within this window is dropped from the visible roster, so a signed-off /
+    // stale / fixture board row can't render regardless of what's in the DB.
+    // Mirrors the server presence-grace default (AF_PRESENCE_GRACE_SECONDS=7200);
+    // a recently-crashed real agent (offline but seen < grace ago) still shows.
+    // Purging the underlying rows is separate DB hygiene.
+    const ROSTER_PRESENCE_GRACE_MS = 2 * 60 * 60 * 1000;
 
     function renderBoard() {
       if (boardEntries.size === 0) {
         boardCardsEl.innerHTML = '<div class="board-empty">No agents reporting yet</div>';
         return;
       }
-      const entries = [...boardEntries.values()].sort((a, b) => {
+      const effNow = Date.now() + inflightOffset;
+      const entries = [...boardEntries.values()].filter((e) => {
+        if (e.online) return true;
+        const seen = Math.max(
+          typeof e.lastSeenAt === "number" ? e.lastSeenAt : 0,
+          typeof e.updatedAt === "number" ? e.updatedAt : 0
+        );
+        return seen > 0 && (effNow - seen) <= ROSTER_PRESENCE_GRACE_MS;
+      }).sort((a, b) => {
         if (a.online !== b.online) return a.online ? -1 : 1;
         return (b.updatedAt || 0) - (a.updatedAt || 0);
       });
+      if (entries.length === 0) {
+        boardCardsEl.innerHTML = '<div class="board-empty">No agents reporting yet</div>';
+        return;
+      }
       let html = "";
       for (const entry of entries) {
         const dotCls = entry.online ? "user-dot" : "user-dot offline";
@@ -2230,7 +2321,7 @@ export function getDashboardHTML(adminToken: string): string {
           const tk = entry.contextTokens;
           const tsStale = !entry.contextTs || (Date.now() - entry.contextTs) > CONTEXT_STALE_MS;
           const presenceLive = !!entry.online && !entry.stale;
-          let ctxCls = tk >= CONTEXT_OVER ? 'over' : (tk >= CONTEXT_WARN ? 'warn' : 'ok');
+          let ctxCls = tk >= CONTEXT_RED ? 'over' : (tk >= CONTEXT_WARN ? 'warn' : 'ok');
           let parked = false;
           if (tsStale) {
             if (presenceLive) parked = true;   // alive but quiet — reading still current
@@ -2241,7 +2332,16 @@ export function getDashboardHTML(adminToken: string): string {
           const note = ctxCls === 'stale'
             ? ' (stale — agent gone, reading may be frozen)'
             : (parked ? ' (parked — agent quiet, count still current)' : '');
-          ctxBadge = '<span class="board-context ' + ctxCls + (parked ? ' parked' : '') + '" title="context ' + tk.toLocaleString() + ' tokens · gauge updated ' + tsTxt + note + '">◈ ' + tkLabel + '</span>';
+          // Status bar (mirrors the cockpit Live gauge): fill toward CONTEXT_OVER (400k),
+          // color green→amber→red by absolute tokens. Reuses the page-wide .ck-live-ctx styles.
+          const ctxClsBar = ctxCls === 'over' ? 'red' : ctxCls === 'warn' ? 'amber' : ctxCls === 'stale' ? 'stale' : 'green';
+          const ctxPct = Math.min(100, Math.round(tk / CONTEXT_OVER * 100));
+          ctxBadge = '<div class="ck-live-ctx ' + ctxClsBar + (parked ? ' parked' : '')
+            + '" title="context ' + tk.toLocaleString() + ' / ' + CONTEXT_OVER.toLocaleString() + ' tokens · gauge updated ' + tsTxt + note + '">'
+            + '<span class="ck-live-ctx-label">ctx</span>'
+            + '<div class="ck-live-ctx-bar"><div class="ck-live-ctx-fill" style="width:' + ctxPct + '%"></div></div>'
+            + '<span class="ck-live-ctx-val">' + tkLabel + '</span>'
+            + '</div>';
         }
         let todosHtml = "";
         if (entry.todos && entry.todos.length > 0) {
@@ -2298,10 +2398,10 @@ export function getDashboardHTML(adminToken: string): string {
           + '<span class="board-agent-name">' + escapeHtml(entry.name) + '</span>'
           + nodeBadge
           + subBadge
-          + ctxBadge
           + '<span class="board-status ' + statusCls + '">' + escapeHtml(entry.status) + '</span>'
           + '<button class="board-remove-btn" data-name="' + escapeHtml(entry.name) + '" title="Remove from board">&#10005;</button>'
           + '</div>'
+          + ctxBadge
           + (entry.mission ? '<div class="board-mission">' + escapeHtml(entry.mission) + '</div>' : '')
           + (entry.activity ? '<div class="board-activity">' + escapeHtml(entry.activity) + '</div>' : '')
           + planHtml
@@ -2335,26 +2435,37 @@ export function getDashboardHTML(adminToken: string): string {
       }
     }
 
-    fetch("/board").then(r => r.json()).then(data => {
-      for (const b of (data.board || [])) {
-        boardEntries.set(b.name, {
-          name: b.name,
-          node: b.node,
-          status: b.status,
-          mission: b.mission,
-          activity: b.activity,
-          todos: b.todos,
-          subagents: b.subagents || 0,
-          sid: b.sid,
-          updatedAt: b.updatedAt,
-          online: !!b.online,
-          stale: !!b.stale,
-          contextTokens: b.contextTokens != null ? b.contextTokens : null,
-          contextTs: b.contextTs != null ? b.contextTs : null,
-        });
-      }
-      renderBoard();
-    }).catch(() => {});
+    // Authoritative load of the agent roster. REPLACE semantics: any name the
+    // fresh /board payload no longer reports (e.g. a junk/fixture row purged
+    // during a hub bounce) is dropped from the local Map so it can't linger as
+    // stale junk after a reconnect. Called on init AND on SSE reconnect.
+    function loadBoard() {
+      return fetch("/board").then(r => r.json()).then(data => {
+        const fresh = new Set();
+        for (const b of (data.board || [])) {
+          fresh.add(b.name);
+          boardEntries.set(b.name, {
+            name: b.name,
+            node: b.node,
+            status: b.status,
+            mission: b.mission,
+            activity: b.activity,
+            todos: b.todos,
+            subagents: b.subagents || 0,
+            sid: b.sid,
+            updatedAt: b.updatedAt,
+            online: !!b.online,
+            lastSeenAt: typeof b.lastSeenAt === "number" ? b.lastSeenAt : null,
+            stale: !!b.stale,
+            contextTokens: b.contextTokens != null ? b.contextTokens : null,
+            contextTs: b.contextTs != null ? b.contextTs : null,
+          });
+        }
+        for (const name of [...boardEntries.keys()]) if (!fresh.has(name)) boardEntries.delete(name);
+        renderBoard();
+      }).catch(() => {});
+    }
+    loadBoard();
 
     loadInflight(); // 3B: initial claimed-plan-task lines for the cards
 
@@ -2362,17 +2473,23 @@ export function getDashboardHTML(adminToken: string): string {
     setInterval(renderBoard, 30000);
 
     // Fetch initial data
-    fetch("/users").then(r => r.json()).then(data => {
-      for (const u of data.users) users.set(u.name, u.online);
-      renderUsers();
-    }).catch(() => {});
+    // Authoritative load/replace of the On-Air roster — drop any name the server
+    // no longer reports (mirrors loadBoard). Called on init + SSE reconnect.
+    function loadUsers() {
+      return fetch("/users").then(r => r.json()).then(data => {
+        const fresh = new Set();
+        for (const u of data.users) { fresh.add(u.name); users.set(u.name, u.online); }
+        for (const name of [...users.keys()]) if (!fresh.has(name)) users.delete(name);
+        renderUsers();
+      }).catch(() => {});
+    }
+    loadUsers();
 
     fetch("/channels").then(r => r.json()).then(data => {
       for (const ch of data.channels) {
         channels.set(ch.name, { memberCount: ch.memberCount, createdBy: ch.createdBy, members: ch.members || [] });
       }
       renderChannels();
-      updateChannelHeader();
     }).catch(() => {});
 
     // Load agent configs
@@ -2397,7 +2514,7 @@ export function getDashboardHTML(adminToken: string): string {
         if (data.messages && data.messages.length > 0) {
           clearEmpty();
           for (const msg of data.messages) {
-            const cls = msg.from === "operator" ? "message operator" : "message";
+            const cls = msg.from === OPERATOR_NAME ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
             const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
             addMessage(
               '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
@@ -2462,7 +2579,7 @@ export function getDashboardHTML(adminToken: string): string {
         if (users.has(ev.from)) users.set(ev.from, true);
         const existingTimer = typingUsers.get(ev.from);
         if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
-        const cls = ev.from === "operator" ? "message operator" : "message";
+        const cls = ev.from === OPERATOR_NAME ? "message operator" : (String(ev.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
         const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
@@ -2509,7 +2626,7 @@ export function getDashboardHTML(adminToken: string): string {
           ev.channel
         );
       } else if (ev.type === "read_update") {
-        if (ev.userName === "operator") {
+        if (ev.userName === OPERATOR_NAME) {
           delete unreadCounts[ev.channel];
           renderChannels();
         }
@@ -2540,6 +2657,9 @@ export function getDashboardHTML(adminToken: string): string {
           subagents: ev.subagents || 0,
           sid: ev.sid !== undefined ? ev.sid : (prev ? prev.sid : null),
           updatedAt: ev.timestamp,
+          // A board_update is itself a liveness beat — stamp lastSeenAt so the
+          // roster render guard keeps a just-active agent visible between polls.
+          lastSeenAt: ev.timestamp,
           // board_update carries no online flag: keep what we knew, or
           // assume online for a brand-new entry (an update implies liveness)
           online: prev ? prev.online : true,
@@ -2566,6 +2686,11 @@ export function getDashboardHTML(adminToken: string): string {
         if (window.__cockpit) window.__cockpit.onPlanUpdate(ev);
         // 3B: also refresh the board cards' claimed-plan-task lines (debounced).
         scheduleInflight();
+      } else if (ev.type === "loop_approval") {
+        // Loop Phase 5 (HITL): a loop's approval-queue item opened (escalate) or was
+        // resolved. Live-refresh the cockpit's Approvals panel (+ Loop Control, since the
+        // loop paused/resumed/terminated). The 5s poll is the fallback; this is instant.
+        if (window.__cockpit && window.__cockpit.onLoopApproval) window.__cockpit.onLoopApproval(ev);
       }
     };
 
@@ -2575,6 +2700,11 @@ export function getDashboardHTML(adminToken: string): string {
       // Cockpit resync: a dropped SSE (e.g. a backgrounded phone tab) may have
       // missed plan_updates — refetch the full board on reconnect.
       if (window.__cockpit) window.__cockpit.onReconnect();
+      // Radio roster resync: authoritatively REPLACE the agent board + On-Air
+      // roster from the server so any row purged during the bounce drops out
+      // instead of lingering as stale junk until a manual reload.
+      loadBoard();
+      loadUsers();
       loadInflight(); // 3B: resync claimed-task lines after a dropped SSE
     };
 
@@ -2584,9 +2714,10 @@ export function getDashboardHTML(adminToken: string): string {
     };
 
     // ===== Meta-harness cockpit (own IIFE; exposes window.__cockpit) =====
-    // Thread the REAL admin token so the cockpit's operator-control POSTs are Bearer-gated
-    // (same token already embedded above for the dashboard script — same page, same blast radius).
-    ${cockpitScript(adminToken)}
+    // Thread the SCOPED cockpit token (A3-a) so the cockpit's operator-control POSTs are
+    // Bearer-gated (same token already embedded above for the dashboard script — same page,
+    // same blast radius). NOT the raw admin token: that never reaches the browser.
+    ${cockpitScript(cockpitToken)}
 
     // Mode switch: Radio (default 3-panel) ↔ Cockpit (task-graph).
     (function () {

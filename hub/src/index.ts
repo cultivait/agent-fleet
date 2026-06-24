@@ -7,19 +7,28 @@ import { closeAllSSEClients } from "./events.js";
 import { autoLaunchAgents } from "./launcher.js";
 import { closeAllPolls } from "./polling.js";
 import { enqueueAndDeliver, ensureQueue } from "./router.js";
-import { createHubServer } from "./server.js";
+import { createHubServer, ensureOperatorPresence } from "./server.js";
 
 const port = parseInt(process.env.PORT ?? "9559", 10);
 
 const joinToken = process.env.AGENT_FLEET_JOIN_TOKEN ?? process.env.WALKIE_TALKIE_JOIN_TOKEN;
-if (!joinToken) {
-  console.error("Error: AGENT_FLEET_JOIN_TOKEN environment variable is required");
-  process.exit(1);
-}
-
 const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
-if (!adminToken) {
-  console.error("Error: AGENT_FLEET_ADMIN_TOKEN environment variable is required");
+if (!joinToken || !adminToken) {
+  const missing = [
+    !joinToken ? "AGENT_FLEET_JOIN_TOKEN" : null,
+    !adminToken ? "AGENT_FLEET_ADMIN_TOKEN" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  console.error(
+    `Error: required token(s) unset: ${missing}\n\n` +
+      `The hub needs a join token (agents authenticate with it) and an admin token\n` +
+      `(operator / cockpit break-glass). Generate and export them, then restart:\n\n` +
+      `  export AGENT_FLEET_JOIN_TOKEN=$(openssl rand -base64 32)\n` +
+      `  export AGENT_FLEET_ADMIN_TOKEN=$(openssl rand -base64 32)\n\n` +
+      `Or run the bootstrap installer, which generates, persists, and wires them\n` +
+      `for you (hub + MCP + hooks). See QUICKSTART.md.`,
+  );
   process.exit(1);
 }
 
@@ -27,6 +36,13 @@ initDB();
 initGeneralChannel();
 
 const server = createHubServer(port, adminToken, joinToken);
+
+// Persistent operator presence: register the operator so `fleet_send to:@operator` always
+// resolves, messages addressed to him queue (and survive restart via rehydration),
+// and the ghost-reaper / kick-all never sweep him. Bootstrapped in the production
+// entrypoint (NOT inside createHubServer) so the test harness, which drives
+// createHubServer directly, is unaffected.
+ensureOperatorPresence();
 
 // After the server is listening, open the dashboard and auto-launch agents
 server.on("listening", () => {

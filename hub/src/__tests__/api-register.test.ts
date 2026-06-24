@@ -27,8 +27,8 @@ describe("POST /register", () => {
     expect(body.token).toBeTruthy();
   });
 
-  it("should reject duplicate registration", async () => {
-    await registerUser(ctx, "reg-dup");
+  it("re-registers an existing callsign as a takeover (newest claimant wins, no 409 wall)", async () => {
+    const first = await registerUser(ctx, "reg-dup");
     const res = await fetch(`${ctx.baseUrl}/register`, {
       method: "POST",
       headers: {
@@ -37,7 +37,15 @@ describe("POST /register", () => {
       },
       body: JSON.stringify({ name: "reg-dup" }),
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; name: string };
+    expect(body.name).toBe("reg-dup");
+    expect(body.token).toBeTruthy();
+    expect(body.token).not.toBe(first); // a fresh token is minted; the old slot is shed
+    // exactly one "reg-dup" on the roster — took over the slot, not duplicated
+    const usersRes = await fetch(`${ctx.baseUrl}/users`);
+    const users = (await usersRes.json()) as { users: { name: string }[] };
+    expect(users.users.filter((u) => u.name === "reg-dup")).toHaveLength(1);
   });
 
   it("should allow reconnect with old token", async () => {
@@ -57,8 +65,8 @@ describe("POST /register", () => {
     expect(body.token).toBeTruthy();
   });
 
-  it("should reject reconnect with wrong old token", async () => {
-    await registerUser(ctx, "reg-wrongtoken");
+  it("re-binds on a missing/wrong old token (reclaim without /kick) and invalidates the old token", async () => {
+    const oldToken = await registerUser(ctx, "reg-wrongtoken");
     const res = await fetch(`${ctx.baseUrl}/register`, {
       method: "POST",
       headers: {
@@ -67,7 +75,13 @@ describe("POST /register", () => {
       },
       body: JSON.stringify({ name: "reg-wrongtoken", oldToken: "wrong" }),
     });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200); // takeover, not the old 409 wall
+    const body = (await res.json()) as { token: string };
+    expect(body.token).toBeTruthy();
+    expect(body.token).not.toBe(oldToken);
+    // the shed old token no longer authenticates
+    const inbox = await fetch(`${ctx.baseUrl}/inbox`, { headers: { Authorization: `Bearer ${oldToken}` } });
+    expect(inbox.status).toBe(401);
   });
 
   it("should reject missing name", async () => {

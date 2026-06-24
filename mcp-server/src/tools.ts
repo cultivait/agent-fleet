@@ -202,7 +202,6 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
 
   // Alias-transition: register the canonical fleet_* tool plus a hidden deprecated
   // radio_* alias delegating to the SAME handler, for one transition version.
-  // See ~/.claude/docs/agent-fleet-rename-plan.md (Lane A).
   // schema/handler are typed `any`: server.tool is heavily overloaded and a
   // precise Parameters<> type resolves to the wrong (annotations) overload, so a
   // localized any keeps the 4-arg (name, description, schema, handler) form sound.
@@ -216,9 +215,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   ) => {
     server.tool(fleetName, description, schema, handler);
     // radio_* aliases are gated behind AF_RADIO_ALIASES (default ON for
-    // backward compatibility, so existing behavior is unchanged).
+    // back-compat with the legacy radio_* tool names, so behavior is unchanged).
     // Set AF_RADIO_ALIASES=0 to drop them — removes the duplicate tool-name
-    // injection and the double ToolSearch result payload.
+    // injection + the double ToolSearch result payload.
     if (process.env.AF_RADIO_ALIASES !== "0") {
       const radioName = `radio_${fleetName.slice("fleet_".length)}`;
       server.tool(radioName, `(deprecated alias of ${fleetName}) ${description}`, schema, handler);
@@ -361,14 +360,14 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   // canonical names auto-derive their deprecated radio_* counterparts via
   // registerTool. Schema + handler are defined once and shared by both names.
   const radioSendDescription =
-    "Send a message to a channel. Only members you @-mention are notified (nudged/woken); everyone else can read it later but is not interrupted. @-mention EVERY member the message affects by exact callsign in the body (e.g. '@pie @fieldbook ...') — naming only one leaves the rest uninformed. @all broadcasts to the channel for transcript/progress notes and notifies NO ONE, so never use it alone for anything urgent or needing a reply. Messages are scoped to a channel.";
+    "Send a message to a channel. Only members you @-mention are notified (nudged/woken); everyone else can read it later but is not interrupted. @-mention EVERY member the message affects by exact callsign in the body (e.g. '@web @api ...') — naming only one leaves the rest uninformed. @all broadcasts to the channel for transcript/progress notes and notifies NO ONE, so never use it alone for anything urgent or needing a reply. Messages are scoped to a channel.";
   const radioSendSchema = {
     to: z
       .string()
       .describe(
         "Primary recipient: @name notifies that member; @all broadcasts to the channel and notifies no one. To notify several members, also @-mention each of them in the message body.",
       ),
-    message: z.string().describe("Message content. @-mention (e.g. '@pie') every member this message affects so they are notified."),
+    message: z.string().describe("Message content. @-mention (e.g. '@web') every member this message affects so they are notified."),
     channel: z
       .string()
       .optional()
@@ -725,7 +724,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
 
   registerTool(
     "fleet_mission",
-    "Set your one-line mission on the shared task board — a deliberate, concise statement of what you're working on (e.g. 'Hardening PIE estimate endpoints'). Visible to all agents and the operator. Set it right after fleet_join and update it whenever your task changes. Keep it free of secrets. Pass an empty string to clear it.",
+    "Set your one-line mission on the shared task board — a deliberate, concise statement of what you're working on (e.g. 'Hardening the auth endpoints'). Visible to all agents and the operator. Set it right after fleet_join and update it whenever your task changes. Keep it free of secrets. Pass an empty string to clear it.",
     { mission: z.string().max(140).describe("One-line mission statement (max 140 chars). Empty string clears it.") },
     async ({ mission }) => {
       if (!currentToken || !currentName) {
@@ -1329,7 +1328,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "fleet_lock_acquire",
     "Meta-harness: acquire a named resource lock so this session is the sole permitted writer. Fails (409) if another session holds a live lease. Fail-open: if the hub is unreachable, the agent should proceed without the lock.",
     {
-      resource_key: z.string().describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:piedb' (required)."),
+      resource_key: z.string().describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:orders' (required)."),
       lease_ms: z
         .number()
         .optional()

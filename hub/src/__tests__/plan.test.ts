@@ -949,7 +949,10 @@ describe("plan step 3 — board-as-view (status-lane projection)", () => {
     timeoutMs = 3000,
   ): Promise<Record<string, unknown>> {
     const controller = new AbortController();
-    const resp = await fetch(`${ctx.baseUrl}/events`, { signal: controller.signal });
+    const resp = await fetch(`${ctx.baseUrl}/events`, {
+      headers: { Authorization: `Bearer ${ctx.cockpitToken}` },
+      signal: controller.signal,
+    });
     const reader = (resp.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buffer = "";

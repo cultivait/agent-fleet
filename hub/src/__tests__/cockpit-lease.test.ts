@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { leaseState, serverClockOffset, stallState } from "../cockpit-lease.js";
+import { STALL_BEAT_MS } from "../constants.js";
 
 describe("serverClockOffset", () => {
   it("is the signed gap between server and client clocks (server ahead → positive)", () => {
@@ -83,9 +84,15 @@ describe("leaseState", () => {
 });
 
 describe("stallState", () => {
-  // STALL_BEAT_MS is 240_000ms (4min). clientNow=2_000_000, offset=0 throughout.
-  const NOW = 2_000_000;
+  // Threshold-agnostic: timings are derived from the canonical STALL_BEAT_MS (constants.ts;
+  // this deployment defaults it to 1h, env-tunable) so these stay correct if the default
+  // changes. NOW sits well above STALL_BEAT_MS so that NOW - beatAge stays positive (a
+  // non-positive lastSeenAt reads as "never-seen owner"). offset=0 unless a test overrides.
+  const NOW = 1_000_000_000;
   const base = { clientNow: NOW, offset: 0 };
+  // Label the formatter would emit for a given idle age (mirrors stallState's own logic).
+  const idleLabel = (ms: number) =>
+    Math.floor(ms / 60_000) >= 1 ? `${Math.floor(ms / 60_000)}m idle` : `${Math.floor(ms / 1000)}s idle`;
 
   it("is not stalled when the owner beat recently (lease valid)", () => {
     // beat 1min ago, lease 10min out.
@@ -95,16 +102,19 @@ describe("stallState", () => {
     expect(s.label).toBeNull();
   });
 
-  it("stalls once the beat is older than the 4min threshold (lease still valid)", () => {
-    // beat 5min ago, lease still 10min out — early dead-agent radar before expiry.
-    const s = stallState({ ...base, lastSeenAt: NOW - 300_000, leaseExpiresAt: NOW + 600_000 });
+  it("stalls once the beat is older than the threshold (lease still valid)", () => {
+    // beat just past the stall threshold, lease still 10min out — early dead-agent
+    // radar before expiry. beatAge is one minute over STALL_BEAT_MS.
+    const beatAge = STALL_BEAT_MS + 60_000;
+    const s = stallState({ ...base, lastSeenAt: NOW - beatAge, leaseExpiresAt: NOW + 600_000 });
     expect(s.stalled).toBe(true);
-    expect(s.beatAgeMs).toBe(300_000);
-    expect(s.label).toBe("5m idle");
+    expect(s.beatAgeMs).toBe(beatAge);
+    expect(s.label).toBe(idleLabel(beatAge));
   });
 
   it("does NOT stall at exactly the threshold (strictly greater than)", () => {
-    const s = stallState({ ...base, lastSeenAt: NOW - 240_000, leaseExpiresAt: NOW + 600_000 });
+    const s = stallState({ ...base, lastSeenAt: NOW - STALL_BEAT_MS, leaseExpiresAt: NOW + 600_000 });
+    expect(s.beatAgeMs).toBe(STALL_BEAT_MS);
     expect(s.stalled).toBe(false);
   });
 
@@ -127,26 +137,32 @@ describe("stallState", () => {
   });
 
   it("applies the server-clock offset rather than the raw client clock", () => {
-    // Client clock 5min BEHIND server (offset +300_000). lastSeenAt on server timeline
-    // 2min before raw clientNow reads 2min idle (not stalled); the true server-effective
-    // now is 5min ahead → 7min idle → stalled.
+    // Client clock is a full threshold BEHIND the server (offset = STALL_BEAT_MS). By the
+    // raw client clock the owner beat only `rawIdle` (2min) ago → under threshold, not
+    // stalled; the true server-effective now is `offset` ahead, pushing beatAge over the
+    // threshold → stalled. Proves the offset is applied, independent of the threshold value.
+    const offset = STALL_BEAT_MS;
+    const rawIdle = 120_000; // 2min by the raw client clock — under any realistic threshold
     const s = stallState({
-      lastSeenAt: NOW - 120_000,
-      leaseExpiresAt: NOW + 600_000,
+      lastSeenAt: NOW - rawIdle,
+      leaseExpiresAt: NOW + offset + 600_000, // lease still valid on the server timeline
       clientNow: NOW,
-      offset: 300_000,
+      offset,
     });
+    const beatAge = rawIdle + offset;
     expect(s.stalled).toBe(true);
-    expect(s.beatAgeMs).toBe(420_000);
-    expect(s.label).toBe("7m idle");
+    expect(s.beatAgeMs).toBe(beatAge);
+    expect(s.label).toBe(idleLabel(beatAge));
   });
 
-  it("renders seconds for a sub-minute idle gap (only reachable under skew)", () => {
-    // Force a >threshold but <1min beatAge via offset so the seconds branch is covered.
-    const s = stallState({ lastSeenAt: NOW, leaseExpiresAt: NOW + 600_000, clientNow: NOW, offset: 250_000 });
-    // effectiveNow = NOW+250_000 → beatAge 250_000ms = 250s > 240s threshold, <1min? no.
-    // 250s is >4min in seconds? 250_000ms = 250s = 4m10s → mins=4 → "4m idle".
+  it("renders a minutes idle label at the threshold boundary", () => {
+    // The "Ns idle" (seconds) branch of the formatter is only reachable when STALL_BEAT_MS
+    // itself is sub-minute; with the realistic (>=1min) threshold a just-over-threshold gap
+    // always renders minutes. Cover the minutes branch right above the boundary.
+    const beatAge = STALL_BEAT_MS + 10_000;
+    const s = stallState({ ...base, lastSeenAt: NOW - beatAge, leaseExpiresAt: NOW + 600_000 });
     expect(s.stalled).toBe(true);
-    expect(s.label).toBe("4m idle");
+    expect(s.label).toBe(idleLabel(beatAge));
+    expect(s.label).toMatch(/^\d+m idle$/);
   });
 });

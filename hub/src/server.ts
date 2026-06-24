@@ -1,16 +1,27 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { dirname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import {
+  authenticateCockpitToken,
   authenticateRequest,
+  cfAccessConfigured,
   getRegisteredUsers,
   getUserRole,
   getUserToken,
+  isPersistentUser,
   isPrincipalUser,
   isUserRegistered,
+  mintCockpitToken,
   registerUser,
+  setPersistent,
   setPrincipal,
   unregisterUser,
+  verifyCfAccessJwt,
 } from "./auth.js";
 import {
   ensureChannelMembership,
@@ -42,10 +53,12 @@ import {
   dbGetChannelMessagesBefore,
   dbGetPendingAck,
   dbGetRecentMessages,
+  dbGetRegistryCallsign,
   dbGetResourceLock,
   dbGetUnreadCounts,
   dbGetUserChannels,
   dbListAgentConfigs,
+  dbDeleteRegistryRow,
   dbListBoard,
   dbListChannels,
   dbListRegistry,
@@ -58,6 +71,7 @@ import {
   dbStampRegistryCallsign,
   dbUpdateAgentConfig,
   dbUpdateReadCursor,
+  dbGetUnreadMessagesTo,
 } from "./db.js";
 import { addSSEClient, broadcast } from "./events.js";
 import { launchAgent } from "./launcher.js";
@@ -97,6 +111,29 @@ import {
   listTasksByProject,
 } from "./plan/store.js";
 import {
+  createLoop,
+  getLoop,
+  listLoops,
+  pauseLoop,
+  resumeLoop,
+  stopLoop,
+  submitVerdict,
+  tickLoop,
+  type LoopConfig,
+  type LoopStatus,
+  type StopReason,
+  type Verdict,
+} from "./loops/store.js";
+import { summarizeLoopSchedule } from "./loops/schedule.js";
+import { addReflection, listReflections } from "./loops/reflexion.js";
+import {
+  getApproval,
+  getPendingApprovalForLoop,
+  listApprovals,
+  resolveApproval,
+  type ApprovalStatus,
+} from "./loops/approvals.js";
+import {
   addPoll,
   clearLastSeen,
   getLastSeen,
@@ -108,7 +145,8 @@ import {
   setOnline,
   touchLastSeen,
 } from "./polling.js";
-import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, pendingCounts, removeQueue, routeMessage } from "./router.js";
+import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, peekQueue, pendingCounts, removeQueue, routeMessage } from "./router.js";
+import { consumeTerminalTicket, mintTerminalTicket, TerminalSession, ticketFromUpgrade } from "./terminal.js";
 import type { RegisterRequest, RegistryEntry, RouteHandler, SendRequest, UserRole } from "./types.js";
 import {
   conductorStatus,
@@ -146,8 +184,72 @@ function sendError(res: ServerResponse, status: number, message: string): void {
 // These names are still registerable via the admin-token path (/admin-send
 // auto-registers the sender, and a future /admin-register endpoint can too).
 // Stored lowercase so the check is case- and whitespace-insensitive, preventing
-// look-alike registrations ("OPERATOR", " operator ", etc.).
+// look-alike registrations (" operator ", "REFEREE", etc.).
 const RESERVED_NAMES = new Set(["operator", "referee"]);
+
+// The canonical persistent operator identity. The configured operator name is the
+// de-facto operator name across the hub (admin-send's default `from`, the kick-all
+// exemption, and the read-cursor surfaces all key on it), so the persistent
+// presence reuses it. Overridable for non-default deployments via AF_OPERATOR_NAME;
+// the default keeps it consistent with those existing operator-name surfaces.
+const OPERATOR_NAME = (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator";
+
+// Network bind host for the hub's HTTP/WS listener. Defaults to localhost-only
+// (127.0.0.1) — the hub is NOT reachable off-box unless this is set explicitly.
+// Opting into a non-localhost bind (e.g. a Tailscale IP, or 0.0.0.0) lets Tier-2
+// clients on other machines join; the join token is then the only gate, so prefer
+// a Tailscale/Cloudflare tunnel over raw 0.0.0.0 on untrusted networks. See
+// .env.example ([multi-node] AGENT_FLEET_BIND_HOST).
+const BIND_HOST = (process.env.AGENT_FLEET_BIND_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
+
+// Bootstrap (and re-assert) the persistent operator presence. Called from
+// the production entrypoint (index.ts) AFTER initDB so the operator is always a
+// valid mention/recipient target, queues messages addressed to it, and is exempt
+// from the ghost-reaper / kick-all. Idempotent: safe to call repeatedly and on a
+// hub already carrying an operator auto-registered by /admin-send — it only (re)asserts
+// the principal + persistent capability, online presence, and #all membership.
+// On FIRST registration it rehydrates the in-memory queue from the durable
+// messages table so a hub restart does not drop messages addressed to the operator.
+//
+// Returns the operator's token (callers generally ignore it; the cockpit reads the
+// operator inbox via the admin-token surface, not this token).
+export function ensureOperatorPresence(name: string = OPERATOR_NAME): string {
+  const firstRegistration = !isUserRegistered(name);
+  if (firstRegistration) {
+    registerUser(name);
+  }
+  // Re-assert capabilities every call (a prior /admin-send auto-register would have
+  // created a NON-principal, NON-persistent, reapable operator — promote it here).
+  setPrincipal(name, true);
+  setPersistent(name, true);
+  ensureQueue(name);
+  setOnline(name);
+  try {
+    joinChannel("#all", name);
+  } catch {
+    /* already joined */
+  }
+  // Seed presence so any reaper that does not yet honor the persistent flag still
+  // sees a fresh lastSeen (belt-and-suspenders alongside the flag exemption).
+  touchLastSeen(name);
+
+  if (firstRegistration) {
+    // Restore anything addressed to the operator that had not yet been read before a restart.
+    const pending = dbGetUnreadMessagesTo(name);
+    for (const msg of pending) {
+      // The DB row carries no `mentions` column; a direct send (to == name) is by
+      // definition addressed to the operator, so stamp it so the operator-inbox
+      // "addressed" filter and pending-counts treat it correctly.
+      enqueueAndDeliver(name, { ...msg, mentions: [name] });
+    }
+    if (pending.length > 0) {
+      console.log(`[operator-presence] rehydrated ${pending.length} message(s) addressed to ${name}`);
+    }
+  }
+  broadcast({ type: "join", name, timestamp: Date.now() });
+  console.log(`[operator-presence] ${name} online (persistent, principal)`);
+  return getUserToken(name) ?? "";
+}
 
 const handleRegister: RouteHandler = async (req, res) => {
   const body = JSON.parse(await readBody(req)) as RegisterRequest;
@@ -160,14 +262,26 @@ const handleRegister: RouteHandler = async (req, res) => {
     return sendError(res, 403, `Name "${body.name}" is reserved for operator use`);
   }
   try {
-    // Allow reconnection only if the caller proves ownership with the old token
+    // Durable identity: a re-join of an already-registered callsign TAKES OVER the
+    // slot — newest claimant wins — instead of the old 409 "already registered" wall
+    // that forced a manual /kick before a dropped-but-alive session could reclaim its
+    // own name (the other half of the operator's "constantly rejoin" pain). A matching
+    // oldToken is the clean-reconnect fast path; a missing/wrong one no longer blocks
+    // the reclaim. Safe here: the join token is shared across the trusted single-
+    // operator fleet, and this mirrors admin-register's oldName shed. Reserved
+    // operator names are already rejected above, so this never reseats the operator/REFEREE.
     if (isUserRegistered(body.name)) {
       const existingToken = getUserToken(body.name);
-      if (!body.oldToken || body.oldToken !== existingToken) {
-        return sendError(res, 409, `User "${body.name}" is already registered`);
-      }
+      const cleanReconnect = body.oldToken != null && body.oldToken === existingToken;
+      console.log(`[register] ${body.name} ${cleanReconnect ? "reconnect (token match)" : "takeover (re-bind)"}`);
       removePoll(body.name);
-      removeQueue(body.name);
+      // T5: only a TAKEOVER drains the pending queue. A clean reconnect (oldToken matches the
+      // live token — e.g. an MCP process restart replaying its persisted token) must PRESERVE
+      // the queue, else every forced re-auth silently drops in-flight messages (the message-loss
+      // half of the hub re-auth bug). unregisterUser only rebinds the token map (+ channels); it
+      // never touches messageQueues, and registerUser→ensureQueue below keeps the existing queue,
+      // so skipping removeQueue here is sufficient to carry the pending messages across the re-auth.
+      if (!cleanReconnect) removeQueue(body.name);
       unregisterUser(body.name);
     }
     // Cancel grace timer if reconnecting
@@ -200,6 +314,13 @@ const handleRegister: RouteHandler = async (req, res) => {
     }
     touchLastSeen(body.name); // seed presence so the ghost-reaper grace starts now
     broadcast({ type: "join", name: body.name, timestamp: Date.now() });
+    // Make GET /whoami authoritative from the first beat of a join: stamp the
+    // registry row (created by the SessionStart self-register hook) with the
+    // confirmed callsign now, rather than waiting for the first board-update. No-op
+    // if the row doesn't exist yet (a board-update will stamp it when it lands).
+    if (body.sid) {
+      dbStampRegistryCallsign(body.sid, user.name);
+    }
     console.log(`[register] ${body.name}`);
 
     if (role === "agent") {
@@ -373,7 +494,9 @@ const handleKick: RouteHandler = async (req, res) => {
 };
 
 const handleKickAll: RouteHandler = async (_req, res) => {
-  const agents = [...getRegisteredUsers()].filter((name) => name !== "operator");
+  // Keep the operator-name skip for back-compat AND exempt any persistent operator
+  // presence — kick-all clears live agents, never the virtual operator identity.
+  const agents = [...getRegisteredUsers()].filter((name) => name !== OPERATOR_NAME && !isPersistentUser(name));
   for (const name of agents) {
     kickUser(name);
   }
@@ -388,7 +511,7 @@ const handleAdminSend: RouteHandler = async (req, res) => {
     channel?: string;
     image?: { data: string; mimeType: string };
   };
-  const from = body.from || "operator";
+  const from = body.from || OPERATOR_NAME;
   if (!body.to || (!body.content && !body.image)) {
     return sendError(res, 400, "Missing 'to' or 'content' field");
   }
@@ -514,6 +637,64 @@ const handleAdminRegister: RouteHandler = async (req, res) => {
 
     console.log(`[admin-register] ${body.oldName ? `${body.oldName} -> ` : ""}${name} (principal=${makePrincipal})`);
     // (6) Same shape as /register.
+    sendJson(res, 200, { token: user.token, name: user.name });
+  } catch (e) {
+    sendError(res, 409, (e as Error).message);
+  }
+};
+
+// REFEREE FAILOVER: member-gated + vacancy-gated claim of the REFEREE seat.
+// Unlike /admin-register (admin token, force), this lets ANY valid member promote
+// itself to REFEREE *only when the seat is empty* — so a killed referee's natural
+// successor can take over without the admin token. The target name is HARDCODED to
+// REFEREE: the endpoint takes no name parameter, so there is no path here to mint
+// the operator identity. The vacancy check and registration run in ONE synchronous critical
+// section (no `await` after readBody) so, under Node's single thread, two concurrent
+// claims on a vacant seat resolve to exactly one winner.
+const handleClaimReferee: RouteHandler = async (req, res, userName) => {
+  if (!userName) return sendError(res, 401, "Unauthorized");
+  const body = JSON.parse(await readBody(req)) as { oldName?: string; sid?: string };
+  const TARGET = "REFEREE";
+
+  // ----- critical section: no `await` below this line -----
+  // Vacancy = NOT (registered AND online). Mirrors the board's liveness check
+  // (isUserRegistered(name) && isOnline(name)); a live referee is never usurped.
+  if (isUserRegistered(TARGET) && isOnline(TARGET)) {
+    return sendJson(res, 409, { error: "referee_seat_occupied", holder: TARGET });
+  }
+
+  try {
+    // Seat is empty or held by a stale/offline record — shed any stale record.
+    if (isUserRegistered(TARGET)) {
+      removePoll(TARGET);
+      removeQueue(TARGET);
+      unregisterUser(TARGET);
+    }
+    // Shed the caller's current callsign so the SAME session becomes REFEREE.
+    const oldName = body.oldName ?? userName;
+    if (oldName && oldName !== TARGET && isUserRegistered(oldName)) {
+      kickUser(oldName);
+    }
+
+    const user = registerUser(TARGET, "agent");
+    setPrincipal(TARGET, true); // REFEREE is always a principal identity.
+    ensureQueue(TARGET);
+    setOnline(TARGET);
+    try {
+      joinChannel("#all", TARGET);
+    } catch {
+      /* already joined or channel issue */
+    }
+    touchLastSeen(TARGET);
+    broadcast({ type: "join", name: TARGET, timestamp: Date.now() });
+    notifyBridges(`USER_JOINED: ${TARGET}`);
+
+    if (body.sid) {
+      dbStampRegistryCallsign(body.sid, TARGET);
+    }
+
+    console.log(`[claim-referee] ${userName} -> ${TARGET} (vacancy claim)`);
+    // Same shape as /register and /admin-register.
     sendJson(res, 200, { token: user.token, name: user.name });
   } catch (e) {
     sendError(res, 409, (e as Error).message);
@@ -669,7 +850,7 @@ const handleAdminChannelCreate: RouteHandler = async (req, res) => {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
   try {
-    dbCreateChannel(channelName, "operator");
+    dbCreateChannel(channelName, OPERATOR_NAME);
     ensureChannelMembership(channelName);
     broadcast({ type: "channel_create", name: channelName, timestamp: Date.now() });
     console.log(`[admin-channel-create] ${channelName}`);
@@ -733,14 +914,48 @@ const handleAdminMarkRead: RouteHandler = async (req, res) => {
     return sendError(res, 400, "Missing or invalid 'channel' field");
   }
   const ts = body.timestamp ?? Date.now();
-  dbUpdateReadCursor("operator", body.channel, ts);
-  broadcast({ type: "read_update", userName: "operator", channel: body.channel, timestamp: ts });
+  dbUpdateReadCursor(OPERATOR_NAME, body.channel, ts);
+  broadcast({ type: "read_update", userName: OPERATOR_NAME, channel: body.channel, timestamp: ts });
   sendJson(res, 200, { ok: true });
 };
 
 const handleAdminUnreadCounts: RouteHandler = async (_req, res) => {
-  const counts = dbGetUnreadCounts("operator");
+  const counts = dbGetUnreadCounts(OPERATOR_NAME);
   sendJson(res, 200, { counts });
+};
+
+// Operator inbox: surface the messages queued for the persistent operator presence
+// so the cockpit / admin surface can show what is waiting for the operator without
+// holding a poll. Admin-token gated (adminRoutes).
+//   GET /admin-operator-inbox          → PEEK (non-destructive); returns the queued
+//                                         messages addressed to the operator + queue depth.
+//   GET /admin-operator-inbox?drain=1  → DRAIN: clears the operator's in-memory queue and
+//                                         advances the per-channel read cursor to now
+//                                         (so /admin-unread-counts resets), then
+//                                         returns the addressed messages that were
+//                                         drained. The full DB transcript is untouched.
+// "addressed" = messages whose `mentions` include the operator (a direct `to:@operator` send or
+// an @operator mention) — the traffic that actually warrants the operator's attention,
+// as opposed to @all chatter merely overheard in the operator's channels.
+const handleAdminOperatorInbox: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const drain = url.searchParams.get("drain") === "1";
+  const queued = drain ? drainQueue(OPERATOR_NAME) : peekQueue(OPERATOR_NAME);
+  const addressed = queued.filter((m) => m.mentions?.includes(OPERATOR_NAME));
+  if (drain && queued.length > 0) {
+    const now = Date.now();
+    for (const channel of new Set(queued.map((m) => m.channel))) {
+      dbUpdateReadCursor(OPERATOR_NAME, channel, now);
+      broadcast({ type: "read_update", userName: OPERATOR_NAME, channel, timestamp: now });
+    }
+  }
+  sendJson(res, 200, {
+    operator: OPERATOR_NAME,
+    drained: drain,
+    addressedCount: addressed.length,
+    queuedCount: queued.length,
+    messages: addressed,
+  });
 };
 
 // Agent config endpoints
@@ -1074,10 +1289,11 @@ export function assertLeaseReapInvariant(planLeaseMs: number, boardReapMs: numbe
 //   2. the async-rewake Stop hook (AF_REWAKE_MAX_SECS, default 1800s) listens
 //      for teammate traffic by polling /pending-counts, which does NOT touch
 //      lastSeen — so a member waiting on teammates looks idle the whole time.
-// Default 2400s (40min) clears both: it outlasts the 30min rewake window and
-// gives long subagents headroom. A true ghost (no heartbeat AND no poll) still
-// clears within this window. Keep AF_PRESENCE_GRACE_SECONDS > AF_REWAKE_MAX_SECS.
-const PRESENCE_GRACE_MS = parseInt(process.env.AF_PRESENCE_GRACE_SECONDS ?? process.env.WT_PRESENCE_GRACE_SECONDS ?? "2400", 10) * 1000;
+// This deployment defaults to 7200s (2h) so long-lived agent sessions aren't
+// false-reaped (upstream general default is 2400s/40min). It outlasts the rewake
+// window and gives long subagents headroom; a true ghost still clears within it.
+// Keep AF_PRESENCE_GRACE_SECONDS > AF_REWAKE_MAX_SECS.
+const PRESENCE_GRACE_MS = parseInt(process.env.AF_PRESENCE_GRACE_SECONDS ?? process.env.WT_PRESENCE_GRACE_SECONDS ?? "7200", 10) * 1000;
 
 function retireBoardEntry(name: string): void {
   const row = dbGetBoardEntry(name);
@@ -1113,6 +1329,9 @@ export function reapGhostAgents(graceMs: number): string[] {
   const reaped: string[] = [];
   for (const name of getRegisteredUsers()) {
     if (getUserRole(name) === "bridge") continue;
+    // Persistent operator presence is a virtual identity with no session —
+    // it never holds a poll and would otherwise always look stale. Never reap it.
+    if (isPersistentUser(name)) continue;
     if (hasOpenPoll(name)) continue;
     if (now - getLastSeen(name) < graceMs) continue;
     removePoll(name);
@@ -1272,9 +1491,18 @@ function isRegistrySessionAlive(entry: RegistryEntry): boolean | null {
 // death is already proven, so no grace gate and no open-poll skip. A no-op when
 // the callsign is null or absent from the roster (e.g. a session killed before it
 // ever radio_joined has a registry row but no presence to retire).
-function retirePresenceForCallsign(callsign: string | null): void {
+function retirePresenceForCallsign(callsign: string | null, hard = true): void {
   if (!callsign || !isUserRegistered(callsign)) return;
   const role = getUserRole(callsign);
+  if (!hard) {
+    // Manual-eviction-only: a proven-dead session DIMS (so the board is honest that
+    // it crashed) but keeps its roster membership + token + board entry until a manual
+    // /kick — a returning agent re-lights without re-joining. Only soft signals here.
+    setOffline(callsign);
+    broadcast({ type: "status", name: callsign, online: false, timestamp: Date.now() });
+    console.log(`[presence-dim] ${callsign} (reaping-disabled: crashed, kept on roster)`);
+    return;
+  }
   removePoll(callsign);
   removeQueue(callsign);
   setOffline(callsign);
@@ -1291,7 +1519,11 @@ function retirePresenceForCallsign(callsign: string | null): void {
 // conductor-spawned slot) its claimed task wedged. Mark provably-dead rows
 // status="crashed" + broadcast, so the conductor can requeue. Returns the keys
 // (session_id, or spawn_id when session_id is null) it crashed.
-export function reapCrashedSessions(): string[] {
+// `retirePresence` (default true) also retires the dead session's roster presence.
+// The hub's auto-sweep passes false under REAPING_DISABLED: a crash still marks
+// the registry row crashed + broadcasts (board honesty), but the member stays on the
+// roster until a manual /kick — so a transient probe-miss can't evict a live agent.
+export function reapCrashedSessions(retirePresence = true): string[] {
   const crashed: string[] = [];
   for (const entry of dbListRegistry()) {
     if (entry.status === "crashed" || entry.status === "signed_off") continue;
@@ -1309,13 +1541,69 @@ export function reapCrashedSessions(): string[] {
       status: "crashed",
       timestamp: Date.now(),
     });
-    // A crashed session's radio_join presence is also dead — retire it now rather
-    // than wait out the 40min ghost grace, so /registry and the roster agree.
-    retirePresenceForCallsign(entry.callsign);
+    // A crashed session's radio_join presence is also dead — retire it now rather than
+    // wait out the ghost grace, so /registry and the roster agree. Under
+    // reaping-disabled (retirePresence=false) this DIMS instead of removing: the
+    // row is marked crashed + the presence goes offline, but the member stays on the
+    // roster until a manual /kick, so a transient probe-miss can't evict a live agent.
+    retirePresenceForCallsign(entry.callsign, retirePresence);
     crashed.push(key);
   }
   if (crashed.length > 0) console.log(`[registry-crash] ${crashed.join(", ")}`);
   return crashed;
+}
+
+// Registry GC. reapCrashedSessions only MARKS rows "crashed"; nothing ever deletes them,
+// so the session ledger grows without bound — every dead session and every role re-claim
+// (e.g. each Claude that becomes REFEREE) leaves a permanent row. Left unchecked this both
+// bloats the table and skews the cockpit context-gauge, which reads dbListRegistry() keyed
+// by callsign: with N stale "REFEREE" rows the last-wins map can surface a long-dead
+// session's token count instead of the live one. This sweep DELETES rows that are provably
+// done while never removing the one row that backs a currently-connected identity.
+//
+// Runs INDEPENDENT of REAPING_DISABLED. That flag governs ROSTER eviction — keeping live
+// (even quiet/dimmed) members on the board under manual-eviction-only so a reconnect needs
+// no re-join. Registry GC touches only the dead ledger: it never evicts a roster member,
+// never dims presence, and never deletes the live identity row, so gating it on no-reap
+// would just let the ledger rot. Two hard guards keep it safe:
+//   (1) a row whose session is provably ALIVE (pid/tmux probe) is never touched;
+//   (2) the NEWEST row of a callsign that is currently registered on the roster is never
+//       touched — that row is the live identity and the /whoami source the rewake hooks
+//       depend on, even when its own liveness probe is undeterminable (heads-down session).
+// A row is deletable when MALFORMED (no started_at — partial writes and test fixtures like
+// "who-B", which never reflect a real running session), or when it is OLD (past graceMs)
+// AND one of: SUPERSEDED (a newer row for the callsign exists, so deletion can't orphan a
+// /whoami mapping), TERMINAL (status crashed/signed_off), or PROVEN DEAD (pid ESRCH / tmux
+// gone). Critically, the NEWEST row of a callsign is NEVER reaped on age alone when its
+// liveness is merely UNDETERMINABLE (pid-less, handle-less): after a hub bounce a live-but-
+// idle session stays un-rejoined (its rewake only fires on queued traffic), so "unregistered
+// + old" is NOT proof of death — reaping it there would churn a live session's identity.
+// Returns the number of rows deleted.
+export function reapDeadRegistryRows(graceMs: number): number {
+  const now = Date.now();
+  const rows = dbListRegistry(); // started_at DESC ⇒ the first row seen per callsign is its newest
+  const seenCallsign = new Set<string>();
+  let removed = 0;
+  for (const entry of rows) {
+    const callsign = entry.callsign;
+    const isNewest = callsign == null || !seenCallsign.has(callsign);
+    if (callsign != null) seenCallsign.add(callsign);
+
+    if (isRegistrySessionAlive(entry) === true) continue; // (1) alive ⇒ sacrosanct
+    if (isNewest && callsign != null && isUserRegistered(callsign)) continue; // (2) live identity row
+
+    const malformed = entry.started_at == null; // partial write / fixture (e.g. "who-B")
+    const old = entry.started_at != null && now - entry.started_at > graceMs;
+    const terminal = entry.status === "crashed" || entry.status === "signed_off";
+    const dead = isRegistrySessionAlive(entry) === false; // pid ESRCH / tmux gone — proven dead
+    // Newest-but-undeterminable rows fail every disjunct below ⇒ kept (no false-positive reap).
+    const deletable = malformed || (old && (!isNewest || terminal || dead));
+    if (!deletable) continue;
+
+    if (dbDeleteRegistryRow(entry)) removed++;
+  }
+  if (removed > 0) console.log(`[registry-gc] pruned ${removed} dead registry row(s)`);
+  return removed;
 }
 
 // Local patch: meta-harness plan core. Thin HTTP glue — domain logic lives in
@@ -1862,8 +2150,388 @@ const handleResourceLockGet: RouteHandler = async (req, res) => {
 };
 // === end C4 ===
 
+// Rewake resolver: map a Claude session id (sid) -> its CURRENT callsign from the
+// registry row. The rewake/msgcheck Stop hooks call this instead of trusting the
+// static /tmp/wt-callsign-<sid> file, which goes stale on an identity rename
+// (become_referee / claim_referee / operator re-register) and then strands the
+// poller on a dead callsign. No-auth, like /users: it returns only a name the
+// caller already owns by sid, and the hooks must read it with zero token plumbing.
+// 404 when no registry row maps to that sid.
+const handleWhoami: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const sid = url.searchParams.get("sid");
+  if (!sid) return sendError(res, 400, "Missing 'sid' query parameter");
+  const name = dbGetRegistryCallsign(sid);
+  if (!name) return sendError(res, 404, "no registry row for sid");
+  sendJson(res, 200, { name });
+};
+
+// ── Loop governor (Phase 1): registry + stop-condition engine ──────────────────
+// Owner ops (create/tick/pause/resume/stop/get/list) are PROTECTED routes so the
+// hub authenticates the caller per-session. pause/resume/stop additionally require
+// caller === owner. Operator force-stop is a separate admin-token route below.
+const handleLoopCreate: RouteHandler = async (req, res, userName) => {
+  const body = JSON.parse(await readBody(req)) as {
+    kind?: string;
+    label?: string;
+    owner_sid?: string | null;
+    config?: LoopConfig;
+    // Phase 3: set interval_ms to register a RECURRING loop; anchor_ms is the
+    // optional wall-clock grid origin (defaults to the creation time).
+    interval_ms?: number | null;
+    anchor_ms?: number | null;
+  };
+  if (!body.kind || typeof body.kind !== "string") {
+    return sendError(res, 400, "Missing or invalid 'kind' field");
+  }
+  if (!body.label || typeof body.label !== "string") {
+    return sendError(res, 400, "Missing or invalid 'label' field");
+  }
+  let loop;
+  try {
+    loop = createLoop({
+      kind: body.kind,
+      label: body.label,
+      owner_callsign: userName as string,
+      owner_sid: body.owner_sid ?? null,
+      config: body.config ?? {},
+      interval_ms: body.interval_ms ?? null,
+      anchor_ms: body.anchor_ms ?? null,
+    });
+  } catch (e) {
+    // computeNextFire rejects a non-positive interval_ms.
+    return sendError(res, 400, (e as Error).message);
+  }
+  sendJson(res, 200, { loop });
+};
+
+const handleLoopTick: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as {
+    id?: string;
+    iteration_delta?: number;
+    tokens_delta?: number;
+    improvement?: number;
+    completeness?: number;
+    confidence?: number;
+    signature?: string;
+    verdict?: Verdict;
+  };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  if (!getLoop(body.id)) return sendError(res, 404, `Loop "${body.id}" not found`);
+  const result = tickLoop(body.id, {
+    iteration_delta: body.iteration_delta,
+    tokens_delta: body.tokens_delta,
+    improvement: body.improvement,
+    completeness: body.completeness,
+    confidence: body.confidence,
+    signature: body.signature,
+    verdict: body.verdict,
+  });
+  // Phase 5: an escalate verdict opens a HITL approval and parks the loop — fan a live
+  // signal to the cockpit (additive SSE event; no cockpit-ui.ts edit) so the operator's
+  // approval queue lights up without a poll.
+  if (result.approval_id) {
+    broadcast({
+      type: "loop_approval",
+      loop_id: body.id,
+      approval_id: result.approval_id,
+      status: "pending",
+      timestamp: Date.now(),
+    });
+  }
+  // Phase 5: feed the loop's recent reflexion memory back on each tick so the agent gets
+  // its prior reflections without a second round-trip. Only attached when present, so a
+  // loop with no reflections still returns the bare {continue:...} contract.
+  const reflections = listReflections(body.id, 10);
+  const payload: Record<string, unknown> = { ...result };
+  if (reflections.length) payload.reflections = reflections;
+  sendJson(res, 200, payload);
+};
+
+// Phase 4 — evaluator-optimizer: submit a judge's structured verdict for this iteration.
+// Any member may submit (like /loop-tick — running the loop, not controlling its lifecycle).
+// Returns {result, loop} so the caller (and the cockpit) sees the updated score trajectory.
+const handleLoopVerdict: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as {
+    id?: string;
+    verdict?: unknown;
+    iteration_delta?: number;
+    tokens_delta?: number;
+  };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  if (body.verdict === undefined) return sendError(res, 400, "Missing 'verdict' field");
+  if (!getLoop(body.id)) return sendError(res, 404, `Loop "${body.id}" not found`);
+  let result: ReturnType<typeof submitVerdict>;
+  try {
+    result = submitVerdict(body.id, body.verdict, {
+      iteration_delta: body.iteration_delta,
+      tokens_delta: body.tokens_delta,
+    });
+  } catch (e) {
+    return sendError(res, 400, (e as Error).message);
+  }
+  sendJson(res, 200, { result, loop: getLoop(body.id) });
+};
+
+// Shared owner-gated lifecycle (pause/resume/stop): only the loop owner may control it.
+async function handleLoopOwnerOp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  userName: string | undefined,
+  action: (id: string, reason?: StopReason) => unknown,
+): Promise<void> {
+  const body = JSON.parse(await readBody(req)) as { id?: string; reason?: string };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  const loop = getLoop(body.id);
+  if (!loop) return sendError(res, 404, `Loop "${body.id}" not found`);
+  if (loop.owner_callsign !== userName) {
+    return sendError(res, 403, "Only the loop owner can control this loop");
+  }
+  const updated = action(body.id, body.reason as StopReason | undefined);
+  sendJson(res, 200, { loop: updated });
+}
+
+const handleLoopPause: RouteHandler = (req, res, userName) =>
+  handleLoopOwnerOp(req, res, userName, (id) => pauseLoop(id));
+const handleLoopResume: RouteHandler = (req, res, userName) =>
+  handleLoopOwnerOp(req, res, userName, (id) => resumeLoop(id));
+const handleLoopStop: RouteHandler = (req, res, userName) =>
+  handleLoopOwnerOp(req, res, userName, (id, reason) => stopLoop(id, reason ?? "external_terminate"));
+
+const handleLoopGet: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { id?: string };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  const loop = getLoop(body.id);
+  if (!loop) return sendError(res, 404, `Loop "${body.id}" not found`);
+  // Phase 5: surface the open HITL approval (if any) alongside the loop so the owner can
+  // see it's parked awaiting an operator decision.
+  const pending = getPendingApprovalForLoop(body.id);
+  sendJson(res, 200, pending ? { loop, pending_approval: pending } : { loop });
+};
+
+const handleLoopList: RouteHandler = async (req, res) => {
+  const raw = await readBody(req);
+  const body = (raw ? JSON.parse(raw) : {}) as { status?: string; owner_callsign?: string };
+  const loops = listLoops({
+    status: body.status as LoopStatus | undefined,
+    owner_callsign: body.owner_callsign,
+  });
+  sendJson(res, 200, { loops });
+};
+
+// Phase 3 read route (PUBLIC, like /board): the scheduled-vs-actual fire view the
+// cockpit's loops card renders. Each entry is the shared loop DTO from
+// summarizeLoopSchedule (schedule fields are null on non-recurring loops). `now` is
+// the server clock so the cockpit computes one shared offset for overdue/aging.
+// P2's admin /loop-admin-list returns this same per-loop object as a superset.
+const handleLoops: RouteHandler = async (_req, res) => {
+  const now = Date.now();
+  const loops = listLoops().map((l) => summarizeLoopSchedule(l, now));
+  sendJson(res, 200, { loops, now });
+};
+
+// ── Reflexion memory (Phase 5): per-loop reflections fed back across retries ──────
+// Owner-authenticated like the rest of the loop routes; the caller's callsign is
+// recorded as the reflecting agent. Anyone who can tick can reflect.
+const handleLoopReflect: RouteHandler = async (req, res, userName) => {
+  const body = JSON.parse(await readBody(req)) as {
+    loop_id?: string;
+    reflection?: string;
+    iteration?: number;
+  };
+  if (!body.loop_id || typeof body.loop_id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'loop_id' field");
+  }
+  if (!body.reflection || typeof body.reflection !== "string" || !body.reflection.trim()) {
+    return sendError(res, 400, "Missing or invalid 'reflection' field");
+  }
+  if (!getLoop(body.loop_id)) return sendError(res, 404, `Loop "${body.loop_id}" not found`);
+  const { id, count } = addReflection({
+    loop_id: body.loop_id,
+    agent_callsign: userName as string,
+    reflection: body.reflection,
+    iteration: body.iteration,
+  });
+  sendJson(res, 200, { ok: true, id, count });
+};
+
+const handleLoopReflections: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { loop_id?: string; limit?: number };
+  if (!body.loop_id || typeof body.loop_id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'loop_id' field");
+  }
+  if (!getLoop(body.loop_id)) return sendError(res, 404, `Loop "${body.loop_id}" not found`);
+  sendJson(res, 200, { reflections: listReflections(body.loop_id, body.limit) });
+};
+
+// Operator force-stop (admin-token): terminate ANY loop regardless of owner.
+const handleLoopAdminStop: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { id?: string; reason?: string };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  if (!getLoop(body.id)) return sendError(res, 404, `Loop "${body.id}" not found`);
+  const updated = stopLoop(body.id, (body.reason as StopReason) ?? "external_terminate");
+  sendJson(res, 200, { loop: updated });
+};
+
+// ── Operator loop visibility + override controls (Phase 2, admin-token) ────────
+// The cockpit holds only the admin token (never a per-session member token), so it
+// reads/controls loops through these admin routes — mirroring /loop-admin-stop:
+// operator override, NO owner check. All three are pure pass-throughs to the
+// Phase-1 engine (listLoops/pauseLoop/resumeLoop), zero semantic change.
+const handleLoopAdminList: RouteHandler = async (_req, res) => {
+  // `now` lets the cockpit compute the wall-clock cap locally against a server clock
+  // (same contract as /board and /plan-board).
+  sendJson(res, 200, { loops: listLoops(), now: Date.now() });
+};
+
+async function handleLoopAdminOp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  action: (id: string) => unknown,
+): Promise<void> {
+  const body = JSON.parse(await readBody(req)) as { id?: string };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  if (!getLoop(body.id)) return sendError(res, 404, `Loop "${body.id}" not found`);
+  sendJson(res, 200, { loop: action(body.id) });
+}
+
+const handleLoopAdminPause: RouteHandler = (req, res) =>
+  handleLoopAdminOp(req, res, (id) => pauseLoop(id));
+const handleLoopAdminResume: RouteHandler = (req, res) =>
+  handleLoopAdminOp(req, res, (id) => resumeLoop(id));
+
+// ── HITL approval queue (Phase 5) — operator-gated, mirrors the REFEREE/admin gate ──
+// List approvals (default: only pending — the live work queue). Optional ?status= and
+// ?loop_id= filters. Admin-token route: this is an operator-facing surface.
+const handleLoopApprovals: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const statusRaw = url.searchParams.get("status");
+  const status = (statusRaw ?? "pending") as ApprovalStatus | "all";
+  const loopId = url.searchParams.get("loop_id") ?? undefined;
+  const approvals = listApprovals({
+    status: status === "all" ? undefined : (status as ApprovalStatus),
+    loop_id: loopId,
+  });
+  sendJson(res, 200, { approvals });
+};
+
+// Operator decision on a pending approval. approve → resume the parked loop; reject →
+// terminate it. NO auto-approve exists anywhere — a paused-on-escalate loop only moves
+// from here. Admin-token gated (adminRoutes), mirroring /loop-admin-stop and the REFEREE
+// direct-auth pattern.
+const handleLoopApprovalResolve: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as {
+    id?: string;
+    decision?: string;
+    by?: string;
+    note?: string;
+  };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  if (body.decision !== "approve" && body.decision !== "reject") {
+    return sendError(res, 400, "Field 'decision' must be 'approve' or 'reject'");
+  }
+  const approval = getApproval(body.id);
+  if (!approval) return sendError(res, 404, `Approval "${body.id}" not found`);
+  if (approval.status !== "pending") {
+    return sendError(res, 409, `Approval "${body.id}" already ${approval.status}`);
+  }
+  const decidedBy = body.by ?? "operator";
+  const status: ApprovalStatus = body.decision === "approve" ? "approved" : "rejected";
+  // Act on the loop first, then record the decision — so a missing loop fails before we
+  // mark the queue item decided.
+  const loop =
+    body.decision === "approve"
+      ? resumeLoop(approval.loop_id)
+      : stopLoop(approval.loop_id, "external_terminate");
+  const resolved = resolveApproval(body.id, status, decidedBy, body.note);
+  broadcast({
+    type: "loop_approval",
+    loop_id: approval.loop_id,
+    approval_id: body.id,
+    status,
+    timestamp: Date.now(),
+  });
+  sendJson(res, 200, { approval: resolved, loop });
+};
+
+// Vendored cockpit assets directory. The compiled server runs from hub/dist/, so
+// the static dir is one level up (hub/static). Resolved from this module's URL so
+// it works regardless of cwd.
+const VENDOR_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "static", "vendor");
+const VENDOR_MIME: Record<string, string> = {
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+};
+async function serveVendorFile(urlPath: string, res: ServerResponse): Promise<void> {
+  // urlPath is like "/vendor/xterm.js". Strip the prefix and resolve under
+  // VENDOR_DIR with a traversal guard (the resolved path MUST stay inside).
+  const rel = urlPath.slice("/vendor/".length);
+  const resolved = normalize(join(VENDOR_DIR, rel));
+  if (!resolved.startsWith(VENDOR_DIR + "/") && resolved !== VENDOR_DIR) {
+    sendError(res, 403, "Forbidden");
+    return;
+  }
+  try {
+    const st = await stat(resolved);
+    if (!st.isFile()) {
+      sendError(res, 404, "Not found");
+      return;
+    }
+    const ext = resolved.slice(resolved.lastIndexOf("."));
+    res.writeHead(200, {
+      "Content-Type": VENDOR_MIME[ext] ?? "application/octet-stream",
+      // Vendored libs are immutable for a given build; allow caching.
+      "Cache-Control": "public, max-age=86400",
+    });
+    createReadStream(resolved).pipe(res);
+  } catch {
+    sendError(res, 404, "Not found");
+  }
+}
+
+// Interactive terminal — mint a single-use, short-lived ticket for a WS attach to
+// a target callsign's live tmux session. Gated by the SAME browser gate as the
+// cockpit (admin token OR scoped cockpit token — it lives in adminRoutes). The
+// ticket is the ONLY auth the WS endpoint accepts; minted ONLY when the callsign
+// has a verified-live tmux session (so a stale registry row can't open a tunnel).
+const handleTerminalTicket: RouteHandler = async (req, res) => {
+  const raw = await readBody(req);
+  let body: { callsign?: unknown };
+  try {
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return sendError(res, 400, "Invalid JSON body");
+  }
+  const callsign = typeof body.callsign === "string" ? body.callsign.trim() : "";
+  if (!callsign) return sendError(res, 400, "callsign is required");
+  // The browser gate proved this request is the operator; we have no per-user
+  // identity on the cockpit lane, so audit under "operator".
+  const ticket = mintTerminalTicket(callsign, "operator");
+  if (!ticket) {
+    return sendError(res, 409, `No live tmux session for callsign "${callsign}"`);
+  }
+  sendJson(res, 200, { ticket: ticket.token, callsign: ticket.callsign, expiresAt: ticket.expiresAt });
+};
+
 const publicRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/users": { method: "GET", handler: handleUsers },
+  "/whoami": { method: "GET", handler: handleWhoami },
+  "/loops": { method: "GET", handler: handleLoops },
   "/channels": { method: "GET", handler: handleListChannels },
   "/board": { method: "GET", handler: handleBoard },
   "/registry": { method: "GET", handler: handleRegistry },
@@ -1961,6 +2629,7 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/admin-board-delete": { method: "POST", handler: handleAdminBoardDelete },
   "/admin-mark-read": { method: "POST", handler: handleAdminMarkRead },
   "/admin-unread-counts": { method: "GET", handler: handleAdminUnreadCounts },
+  "/admin-operator-inbox": { method: "GET", handler: handleAdminOperatorInbox },
   "/admin-agent-configs": { method: "GET", handler: handleAdminAgentConfigs },
   "/admin-agent-config-create": { method: "POST", handler: handleAdminAgentConfigCreate },
   "/admin-agent-config-update": { method: "POST", handler: handleAdminAgentConfigUpdate },
@@ -1980,6 +2649,18 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   // by route table: this one is gated on adminToken, broadcasts project_create, and
   // the cockpit's onPlanUpdate refreshes the picker live.
   "/admin-project-create": { method: "POST", handler: handleProjectCreate },
+  // Loop governor — operator force-stop: terminate any loop regardless of owner.
+  "/loop-admin-stop": { method: "POST", handler: handleLoopAdminStop },
+  // Loop governor — operator visibility + override (cockpit, Phase 2): admin-token
+  // read of all loops + override pause/resume (no owner check), same guard as -stop.
+  "/loop-admin-list": { method: "GET", handler: handleLoopAdminList },
+  "/loop-admin-pause": { method: "POST", handler: handleLoopAdminPause },
+  "/loop-admin-resume": { method: "POST", handler: handleLoopAdminResume },
+  // Loop Phase 5 (HITL) — operator-gated approval queue: list + approve/reject.
+  "/loop-approvals": { method: "GET", handler: handleLoopApprovals },
+  "/loop-approval-resolve": { method: "POST", handler: handleLoopApprovalResolve },
+  // Interactive terminal — mint a single-use WS ticket for a callsign's tmux session.
+  "/terminal-ticket": { method: "POST", handler: handleTerminalTicket },
 };
 
 const protectedRoutes: Record<string, { method: string; handler: RouteHandler }> = {
@@ -1988,12 +2669,26 @@ const protectedRoutes: Record<string, { method: string; handler: RouteHandler }>
   "/inbox": { method: "GET", handler: handleInbox },
   "/ack": { method: "POST", handler: handleAck },
   "/unregister": { method: "POST", handler: handleUnregister },
+  "/claim-referee": { method: "POST", handler: handleClaimReferee },
   "/channel-create": { method: "POST", handler: handleChannelCreate },
   "/channel-join": { method: "POST", handler: handleChannelJoin },
   "/channel-leave": { method: "POST", handler: handleChannelLeave },
   "/channel-invite": { method: "POST", handler: handleChannelInvite },
   "/channel-history": { method: "GET", handler: handleChannelHistory },
   "/messages": { method: "GET", handler: handleMessages },
+  // Loop governor — owner-authenticated (per-session token). pause/resume/stop
+  // additionally enforce caller === owner inside the handler.
+  "/loop-create": { method: "POST", handler: handleLoopCreate },
+  "/loop-tick": { method: "POST", handler: handleLoopTick },
+  "/loop-verdict": { method: "POST", handler: handleLoopVerdict },
+  "/loop-pause": { method: "POST", handler: handleLoopPause },
+  "/loop-resume": { method: "POST", handler: handleLoopResume },
+  "/loop-stop": { method: "POST", handler: handleLoopStop },
+  "/loop-get": { method: "POST", handler: handleLoopGet },
+  "/loop-list": { method: "POST", handler: handleLoopList },
+  // Loop Phase 5 — reflexion memory: any member who can tick may record/read reflections.
+  "/loop-reflect": { method: "POST", handler: handleLoopReflect },
+  "/loop-reflections": { method: "POST", handler: handleLoopReflections },
 };
 
 function authenticateBearer(req: IncomingMessage, expected: string): boolean {
@@ -2006,6 +2701,19 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
 const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Operator directive: agents leave the roster ONLY on a manual /kick (or a voluntary
+// fleet_disconnect) — NEVER via automatic staleness/crash eviction, so piloting the
+// fleet from one platform doesn't mean constantly re-joining quiet agents. When on
+// (the default), the three auto-eviction paths are neutered: the 60s ghost-reaper
+// sweep, the stale-poll grace timer, and the registry crash-sweep's presence retire.
+// Each still DIMS presence / marks registry status (the board stays honest about who
+// is idle/crashed) but KEEPS the membership + token, so a returning agent is still
+// registered and needs no re-join. The reaper functions themselves are unchanged and
+// still evict when called directly (manual /kick, tests). Set
+// AF_DISABLE_REAP=false to restore the automatic reapers.
+const REAPING_DISABLED =
+  (process.env.AF_DISABLE_REAP ?? process.env.WT_DISABLE_REAP ?? "true").toLowerCase() !== "false";
+
 export function createHubServer(port: number, adminToken: string, joinToken: string): import("node:http").Server {
   // D4 (b): refuse to boot with a lease>=reap misconfig that would re-open the
   // anti-zombie window. Fail loud here, before any wiring. See assertLeaseReapInvariant.
@@ -2014,8 +2722,17 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
   // When a poll connection drops unexpectedly, mark user offline and start grace timer
   onPollDisconnect((userName) => {
     if (!isUserRegistered(userName)) return;
+    // The persistent operator presence never holds a poll, but guard anyway: it must
+    // never be marked offline or auto-unregistered by the stale-poll grace timer.
+    if (isPersistentUser(userName)) return;
     setOffline(userName);
     broadcast({ type: "status", name: userName, online: false, timestamp: Date.now() });
+    // Manual-eviction-only: dim presence on socket loss but NEVER auto-unregister —
+    // only a manual /kick removes. Keeps the agent registered so a reconnect needs no re-join.
+    if (REAPING_DISABLED) {
+      console.log(`[offline] ${userName} (reaping-disabled: kept on roster)`);
+      return;
+    }
     console.log(`[offline] ${userName} (grace period ${STALE_GRACE_MS / 1000}s)`);
 
     // Clear any existing grace timer
@@ -2089,25 +2806,90 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     });
   }
 
+  // A2-a: browser-route gate. Passes iff the request carries a valid CF Access
+  // JWT OR a valid scoped cockpit token. Used ONLY for `GET /` and `GET /events`.
+  // Never throws; the verify path itself fails closed on missing config / bad
+  // token. The cockpit-token check is cheap and synchronous, so try it first to
+  // skip the JWKS round-trip on in-TTL reloads (A2-a clause b).
+  async function passesBrowserGate(req: IncomingMessage): Promise<boolean> {
+    // Solo / single-machine deploy: when Cloudflare Access is NOT configured the
+    // hub is a localhost-only deployment (it binds 127.0.0.1), so the browser
+    // dashboard must be reachable without a token — otherwise a fresh clone 403s
+    // its own dashboard. CF Access is the gate for tunneled / exposed / multi-node
+    // deploys; when it IS configured this falls through and the existing
+    // CF-JWT / cockpit-token / admin checks below apply UNCHANGED (a prod hub that
+    // sets CF_ACCESS_* sees no behavior change). Exposing the hub beyond localhost
+    // without CF Access leaves the dashboard open — documented in QUICKSTART.
+    if (!cfAccessConfigured()) return true;
+    if (authenticateCockpitToken(req)) return true;
+    // Break-glass recovery: the real admin token always passes the browser gate
+    // so an operator can still reach the cockpit (and have it mint a scoped
+    // token) if CF Access config misfires — fail-closed would otherwise 403
+    // everyone, the operator included. The admin token is NEVER embedded in the served
+    // page (A3-a), so this opens no anonymous path: only a holder of the secret
+    // admin token can use it.
+    if (authenticateBearer(req, adminToken)) return true;
+    try {
+      return await verifyCfAccessJwt(req);
+    } catch {
+      return false;
+    }
+  }
+
   function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const path = url.pathname;
 
-    // Dashboard & SSE
+    // Dashboard & SSE — BROWSER routes (A2-a). These are the only routes that
+    // accept Cloudflare Access JWT auth; every other route below keeps its
+    // existing machine-lane / public behavior UNCHANGED. A request passes iff it
+    // carries EITHER a valid CF Access JWT OR a valid scoped cockpit token; else
+    // 403. The decision is async (JWT verify may hit the JWKS), so it runs in a
+    // promise and the dispatcher returns immediately.
     if (path === "/" && req.method === "GET") {
-      // The dashboard HTML is regenerated per request (it embeds the admin token
-      // and ships the current build). Without this, browsers + the CF edge
-      // heuristically cache it and serve a STALE dashboard after a deploy. Force
-      // revalidation so a new build is always picked up on the next load.
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
+      void passesBrowserGate(req).then((ok) => {
+        if (!ok) {
+          sendError(res, 403, "Forbidden");
+          return;
+        }
+        // The dashboard HTML is regenerated per request (it embeds a fresh
+        // scoped cockpit token and ships the current build). Without no-store,
+        // browsers + the CF edge heuristically cache it and serve a STALE
+        // dashboard — AND would pin a stale/expired cockpit token. Force
+        // revalidation so a new build + a fresh token are always picked up.
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+        });
+        // A3-a: embed a freshly-minted scoped cockpit token, NOT the raw admin
+        // token. The raw admin token never reaches the browser. Also thread the
+        // configured operator name so the dashboard tags operator messages without
+        // a hardcoded handle.
+        res.end(getDashboardHTML(mintCockpitToken(), OPERATOR_NAME));
+      }).catch(() => {
+        sendError(res, 403, "Forbidden");
       });
-      res.end(getDashboardHTML(adminToken));
       return;
     }
     if (path === "/events" && req.method === "GET") {
-      addSSEClient(res);
+      void passesBrowserGate(req).then((ok) => {
+        if (!ok) {
+          sendError(res, 403, "Forbidden");
+          return;
+        }
+        addSSEClient(res);
+      }).catch(() => {
+        sendError(res, 403, "Forbidden");
+      });
+      return;
+    }
+
+    // Vendored cockpit assets (xterm.js + fit addon + css). Static, public files
+    // (just open-source libs); served from disk so the cockpit never depends on a
+    // CDN. <script src>/<link href> can't carry a Bearer header, so these are not
+    // browser-gated — they leak no operator data. Path-traversal-guarded.
+    if (path.startsWith("/vendor/") && req.method === "GET") {
+      void serveVendorFile(path, res);
       return;
     }
 
@@ -2141,14 +2923,19 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
       return;
     }
 
-    // Admin routes (require admin token)
+    // Admin routes (require admin token OR a valid scoped cockpit token).
+    // A3-a: the cockpit browser no longer holds the raw admin token — it holds a
+    // short-lived scoped cockpit token minted on an authenticated GET /. Accept
+    // EITHER here so the cockpit's admin POSTs work, while the real adminToken
+    // (used by the CLI / other tools) keeps working unchanged. Both are Bearer
+    // tokens in the Authorization header; neither is ever logged.
     const adminRoute = adminRoutes[path];
     if (adminRoute) {
       if (req.method !== adminRoute.method) {
         sendError(res, 405, "Method not allowed");
         return;
       }
-      if (!authenticateBearer(req, adminToken)) {
+      if (!authenticateBearer(req, adminToken) && !authenticateCockpitToken(req)) {
         sendError(res, 401, "Admin token required");
         return;
       }
@@ -2185,8 +2972,15 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     sendError(res, 404, "Not found");
   }
 
-  // Reap retired/abandoned board entries past the grace period
-  setInterval(() => reapStaleBoardEntries(BOARD_REAP_MINUTES * 60_000), BOARD_REAP_SWEEP_MS).unref();
+  // Reap retired/abandoned board entries past the grace period. Gated by
+  // REAPING_DISABLED too: under no-reap a member persists (possibly dimmed offline),
+  // so its board CARD must persist with it — otherwise the card vanishes at
+  // AF_BOARD_REAP_MINUTES while the roster keeps the member, and board/roster
+  // disagree (undercutting "pilot from one platform"). The function is unchanged when
+  // called directly; only the auto-sweep is gated.
+  setInterval(() => {
+    if (!REAPING_DISABLED) reapStaleBoardEntries(BOARD_REAP_MINUTES * 60_000);
+  }, BOARD_REAP_SWEEP_MS).unref();
 
   // Reap ghost agents (died between polls, no socket drop) every 60s.
   // C5: also run an unconditional lease reclaim on the same tick. Reclaim was
@@ -2197,7 +2991,9 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
   // demotes on release). A no-op when nothing is expired; emits a board update per
   // reclaimed task so live viewers see the release without waiting for a read.
   setInterval(() => {
-    reapGhostAgents(PRESENCE_GRACE_MS);
+    // Manual-eviction-only suppresses the staleness sweep (quiet agents are never
+    // auto-removed); the lease reclaim is unrelated to presence and always runs.
+    if (!REAPING_DISABLED) reapGhostAgents(PRESENCE_GRACE_MS);
     reclaimAndEmit();
   }, 60_000).unref();
 
@@ -2205,9 +3001,52 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
   // no lifecycle verb retired and mark them crashed, so the conductor can requeue a
   // wedged task. Read-only probe (tmux has-session / kill -0); fires nothing itself.
   const REGISTRY_SWEEP_MS = parseInt(process.env.AF_REGISTRY_SWEEP_SECONDS ?? process.env.WT_REGISTRY_SWEEP_SECONDS ?? "30", 10) * 1000;
-  setInterval(() => reapCrashedSessions(), REGISTRY_SWEEP_MS).unref();
+  // Grace before a dead/superseded registry row is hard-deleted by the GC. A freshly
+  // crashed row lingers this long so the conductor can read its "crashed" status and
+  // requeue, then it's pruned. Default 1h. Malformed rows (no started_at) ignore grace.
+  const REGISTRY_REAP_GRACE_MS =
+    parseInt(process.env.AF_REGISTRY_REAP_GRACE_SECONDS ?? process.env.WT_REGISTRY_REAP_GRACE_SECONDS ?? "3600", 10) * 1000;
+  setInterval(() => {
+    reapCrashedSessions(!REAPING_DISABLED);
+    // GC runs unconditionally (see reapDeadRegistryRows): it prunes only the dead ledger,
+    // never a live member's presence, so REAPING_DISABLED must NOT gate it or the table rots.
+    reapDeadRegistryRows(REGISTRY_REAP_GRACE_MS);
+  }, REGISTRY_SWEEP_MS).unref();
 
   const server = createServer(handleRequest);
+  // Interactive terminal WS — attached to the SAME :PORT via HTTP 'upgrade'.
+  // noServer mode: WE decide whether to accept each upgrade. The ONLY accepted
+  // path is /terminal, and ONLY with a valid single-use ticket (query param).
+  // No ticket / invalid / expired → reject the upgrade (no socket is ever
+  // handed to ws). This is the sole auth path: there is NO anonymous connect.
+  const terminalWss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (url.pathname !== "/terminal") {
+      // Unknown WS path — refuse cleanly.
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    // Consume the ticket BEFORE the handshake — one-time, bound to {callsign,
+    // tmux session}. Reject (401) if missing/invalid/expired/already-used.
+    const ticket = consumeTerminalTicket(ticketFromUpgrade(req));
+    if (!ticket) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    terminalWss.handleUpgrade(req, socket, head, (ws) => {
+      const session = new TerminalSession(ws, ticket);
+      session.start();
+    });
+  });
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
       console.error(`Error: Port ${port} is already in use. Is another Hub instance running?`);
@@ -2215,8 +3054,14 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     }
     throw err;
   });
-  server.listen(port, "127.0.0.1", () => {
+  server.listen(port, BIND_HOST, () => {
     console.log(`Agent Fleet Hub listening on http://localhost:${port}`);
+    // LOUD one-time guardrail: a non-localhost bind exposes the hub off-box.
+    if (!["127.0.0.1", "::1", "localhost"].includes(BIND_HOST)) {
+      console.warn(
+        `[agent-fleet] WARNING: Hub now reachable on ${BIND_HOST}:${port}. The join token is the only gate — prefer a Tailscale/Cloudflare tunnel over raw 0.0.0.0 on untrusted networks.`,
+      );
+    }
   });
   return server;
 }

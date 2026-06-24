@@ -42,8 +42,9 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
 export const CONTROL_FILE =
+  process.env.AF_CONDUCTOR_CONTROL_FILE ||
   process.env.WT_CONDUCTOR_CONTROL_FILE ||
-  join(homedir(), ".config", "walkie-talkie", "conductor-control.json");
+  join(homedir(), ".config", "agent-fleet", "conductor-control.json");
 
 export const CONTROL_VERSION = 1;
 

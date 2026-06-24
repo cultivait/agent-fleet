@@ -1,8 +1,12 @@
 import { copyFileSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 
 import { initPlanSchema } from "./plan/store.js";
+import { initLoopSchema } from "./loops/store.js";
+import { initReflexionSchema } from "./loops/reflexion.js";
+import { initApprovalSchema } from "./loops/approvals.js";
 import type { Message, MessageImage, PendingAckRow, RegistryEntry } from "./types.js";
 
 export interface AgentConfigRow {
@@ -41,6 +45,37 @@ export function initDB(): void {
     process.env.AGENT_FLEET_DB_PATH ??
     process.env.WALKIE_TALKIE_DB_PATH ??
     path.join(process.cwd(), "agent-fleet.db");
+
+  // === TEST SAFETY GUARD — regression-proof test isolation ===
+  // Under a test runner the DB must NEVER resolve to a real, shared store — above all
+  // the prod hub file. History: the rename added AGENT_FLEET_DB_PATH at HIGHER
+  // precedence than the legacy WALKIE_TALKIE_DB_PATH, and the process manager exports the
+  // prod path (e.g. /var/lib/agent-fleet/agent-fleet.db) into every builder shell. The test suite
+  // only ever neutralizes the LEGACY var (WALKIE_TALKIE_DB_PATH=":memory:"), so the
+  // inherited AGENT_FLEET_DB_PATH won this `??` chain and every initDB() opened PROD —
+  // re-seeding fixtures into the live store on each `vitest` run. The vitest setupFile
+  // now drops the inherited var so :memory: actually takes effect; this guard makes the
+  // failure mode IMPOSSIBLE to reintroduce: under VITEST / NODE_ENV=test, the only
+  // allowed targets are ":memory:" or a file inside the OS temp dir (where db-migration
+  // tests legitimately write). Anything else — the prod DB file, a repo-local
+  // agent-fleet.db — throws loudly instead of silently polluting a real database.
+  const underTest = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+  if (underTest && dbPath !== ":memory:") {
+    const resolved = path.resolve(dbPath);
+    const tmpRoot = path.resolve(os.tmpdir());
+    const inTmp = resolved === tmpRoot || resolved.startsWith(tmpRoot + path.sep);
+    if (!inTmp) {
+      throw new Error(
+        `[db] TEST SAFETY GUARD tripped: refusing to open a real DB file while under test.\n` +
+          `  resolved path : ${resolved}\n` +
+          `  allowed values: ":memory:" or any file inside ${tmpRoot}\n` +
+          `  Set WALKIE_TALKIE_DB_PATH=":memory:" (or a temp path) for this test. This guard\n` +
+          `  exists because the suite once polluted the PROD hub store when an inherited\n` +
+          `  AGENT_FLEET_DB_PATH overrode the test's :memory: setting.`,
+      );
+    }
+  }
+
   // Agent Fleet rename transition: when resolving the DEFAULT location (no explicit
   // *_DB_PATH override), if the new agent-fleet.db doesn't exist yet but a legacy
   // walkie-talkie.db sits beside it, carry the data over on first boot. Checkpoint the
@@ -235,6 +270,13 @@ export function initDB(): void {
   // Local patch: meta-harness plan core (Option-C module owns its own schema)
   initPlanSchema(db);
 
+  // Loop governor (Phase 1): registry + stop-condition engine owns its own schema
+  initLoopSchema(db);
+
+  // Loop Phase 5: reflexion memory + HITL approval queue each own their own schema.
+  initReflexionSchema(db);
+  initApprovalSchema(db);
+
   // Seed #all if it doesn't exist
   const existing = db.prepare("SELECT name FROM channels WHERE name = ?").get("#all");
   if (!existing) {
@@ -414,6 +456,26 @@ export function dbGetUnreadCounts(userName: string): Record<string, number> {
 
 export function dbDeleteReadCursorsForChannel(channel: string): void {
   db.prepare("DELETE FROM read_cursors WHERE channel = ?").run(channel);
+}
+
+// Operator presence: messages directly addressed to `name` (the "to" column) that
+// the operator has NOT read yet (newer than its per-channel read cursor), oldest
+// first. Used by ensureOperatorPresence to REHYDRATE the operator's in-memory queue
+// after a hub restart so nothing addressed to the operator is lost across a restart — the
+// in-memory queue is volatile but the messages row + read cursor are durable.
+// Note: only direct sends (to == name) are recoverable from the DB; @-mentions
+// inside an @all broadcast are not a persisted column, so they are not rehydrated.
+export function dbGetUnreadMessagesTo(name: string, limit = 200): Message[] {
+  const rows = db
+    .prepare(
+      `SELECT m.id, m."from", m."to", m.content, m.channel, m.timestamp, m.image, m.seq
+       FROM messages m
+       LEFT JOIN read_cursors rc ON rc.user_name = ? AND rc.channel = m.channel
+       WHERE m."to" = ? AND m.timestamp > COALESCE(rc.last_read_at, 0)
+       ORDER BY m.timestamp ASC LIMIT ?`,
+    )
+    .all(name, name, limit) as Record<string, unknown>[];
+  return rows.map(parseMessageRow);
 }
 
 // Local patch: task board CRUD
@@ -723,10 +785,36 @@ export function dbStampRegistryCallsign(sessionId: string, callsign: string): bo
   return db.prepare("UPDATE registry SET callsign = ? WHERE session_id = ?").run(callsign, sessionId).changes > 0;
 }
 
+// Resolve the CURRENT callsign for a session by its sid. The rewake/msgcheck Stop
+// hooks query this (via GET /whoami) instead of trusting the static
+// /tmp/wt-callsign-<sid> file, which goes stale on an identity rename
+// (become_referee / claim_referee / operator re-register). The registry row is the
+// source of truth: its callsign is stamped on every identity op. Returns null when
+// no row maps to the sid (a session that never registered).
+export function dbGetRegistryCallsign(sessionId: string): string | null {
+  const row = db.prepare("SELECT callsign FROM registry WHERE session_id = ?").get(sessionId) as
+    | { callsign: string | null }
+    | undefined;
+  return row?.callsign ?? null;
+}
+
 export function dbSetRegistryStatusBySession(sessionId: string, status: string): boolean {
   return db.prepare("UPDATE registry SET status = ? WHERE session_id = ?").run(status, sessionId).changes > 0;
 }
 
 export function dbSetRegistryStatusBySpawn(spawnId: string, status: string): boolean {
   return db.prepare("UPDATE registry SET status = ? WHERE spawn_id = ?").run(status, spawnId).changes > 0;
+}
+
+// Hard-delete a registry row, keyed by session_id then spawn_id (the same identity keys
+// dbRegistryUpsert merges on). Used by the registry GC sweep (reapDeadRegistryRows) to
+// prune dead/superseded/fixture rows so the session ledger doesn't grow without bound —
+// reapCrashedSessions only MARKS rows "crashed", it never removes them. No-op (returns
+// false) for a row carrying neither key.
+export function dbDeleteRegistryRow(entry: { session_id?: string | null; spawn_id?: string | null }): boolean {
+  if (entry.session_id != null)
+    return db.prepare("DELETE FROM registry WHERE session_id = ?").run(entry.session_id).changes > 0;
+  if (entry.spawn_id != null)
+    return db.prepare("DELETE FROM registry WHERE spawn_id = ?").run(entry.spawn_id).changes > 0;
+  return false;
 }

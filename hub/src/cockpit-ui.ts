@@ -188,16 +188,19 @@ body.cockpit-mode #clear-btn { display: none !important; }
   .ck-lane-head .caret { transition: none !important; }
 }
 
-/* E1: Live/Plan main toggle */
+/* E1: Loop/Plan main toggle */
 .ck-main-toggle { display: flex; gap: 2px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 2px; flex: none; }
 .ck-main-btn { appearance: none; border: none; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 6px; cursor: pointer; }
 .ck-main-btn.active { background: var(--accent-soft); color: var(--accent-text); }
+/* Pinned pending-approvals badge in the top bar — always visible (even off the Loop page); click jumps to the Loop page approvals. */
+.ck-appr-badge { appearance: none; border: 1px solid transparent; background: var(--red-soft); color: var(--red); font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 3px 9px; border-radius: 999px; cursor: pointer; flex: none; }
+.ck-appr-badge:hover { filter: brightness(1.06); }
 
-/* E1: Live fleet view container */
-#ck-view-live { display: none; flex: 1; overflow-y: auto; padding: 12px; flex-direction: column; }
-body.ck-main-live #ck-view-live { display: flex; }
-body.ck-main-live #ck-plan-wrap { display: none; }
-body.ck-main-live .ck-proj { display: none; }
+/* E1: Loop view container (loop control + schedule + approvals) */
+#ck-view-loop { display: none; flex: 1; overflow-y: auto; padding: 12px; flex-direction: column; }
+body.ck-main-loop #ck-view-loop { display: flex; }
+body.ck-main-loop #ck-plan-wrap { display: none; }
+body.ck-main-loop .ck-proj { display: none; }
 #ck-plan-wrap { display: flex; flex: 1; flex-direction: column; overflow: hidden; }
 
 /* E1: Live fleet cards */
@@ -242,6 +245,8 @@ body.ck-main-live .ck-proj { display: none; }
 /* pending = gauge not yet reported (null tokens or null ts) */
 .ck-live-ctx.pending .ck-live-ctx-bar { display: none; }
 .ck-live-ctx.pending .ck-live-ctx-val { color: var(--text-tertiary); min-width: 0; }
+/* compact gauge variant: board chips + Right-Now rail — bar only (full count on hover), tighter margins, no label/value */
+.ck-live-ctx.ck-ctx-compact { margin: 5px 0 1px; }
 
 /* ===== Operator Control Panel (WS-C) ===== */
 .ck-launch-ref { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 6px; cursor: pointer; flex: none; }
@@ -295,6 +300,134 @@ body.ck-main-live .ck-proj { display: none; }
 .ck-pin:hover { border-color: var(--accent-text); color: var(--accent-text); }
 .ck-pin.pinned { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
 .ck-inst-pin { margin-left: 6px; }
+/* Phase 3: governed-loop schedule card (scheduled-vs-actual fire times). Self-contained
+   ck-loops block — P2's control card is the separate ck-lctl. */
+.ck-loops { padding: 0 10px 10px; }
+.ck-loops-hdr { display: flex; align-items: center; gap: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-tertiary); margin: 10px 0 5px; cursor: pointer; user-select: none; }
+.ck-loops-count { color: var(--text-tertiary); text-transform: none; letter-spacing: 0; }
+.ck-loops-caret { margin-left: auto; font-size: 10px; transition: transform .15s; }
+.ck-loops.open .ck-loops-caret { transform: rotate(90deg); }
+.ck-loops-body { display: none; }
+.ck-loops.open .ck-loops-body { display: block; }
+.ck-loops-row { border: 1px solid var(--border-subtle); border-radius: 6px; padding: 6px 9px; margin-bottom: 5px; background: var(--bg-raised); }
+.ck-loops-row.done { opacity: .55; }
+.ck-loops-head { display: flex; align-items: center; gap: 8px; }
+.ck-loops-label { font-weight: 600; font-size: 12px; color: var(--text-primary); }
+.ck-loops-status { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--bg-hover); color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+.ck-loops-status.running { color: var(--green); }
+.ck-loops-status.paused { color: var(--yellow); }
+.ck-loops-sched { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.ck-loops-int { color: var(--text-tertiary); }
+.ck-loops-next.bad { color: var(--red); }
+.ck-loops-drift.ok { color: var(--green); }
+.ck-loops-drift.warn { color: var(--yellow); }
+.ck-loops-drift.bad { color: var(--red); }
+
+/* ===== Operator Loops panel (Phase 2) ===== */
+/* Persistent collapsible operator section (mirrors the Conductor card): admin-token
+   gated loop visibility + override pause/resume/terminate, outside the render-wiped views. */
+.ck-lctl { flex: none; border-bottom: 1px solid var(--border-subtle); background: var(--bg-raised); }
+.ck-lctl-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; user-select: none; }
+.ck-lctl-head .ck-lctl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); flex: none; }
+.ck-lctl-head .ck-lctl-dot.active { background: var(--green); }
+.ck-lctl-title { font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.ck-lctl-count { font-size: 11px; color: var(--text-tertiary); }
+.ck-lctl-caret { margin-left: auto; color: var(--text-tertiary); font-size: 10px; transition: transform .15s; }
+.ck-lctl.open .ck-lctl-caret { transform: rotate(90deg); }
+.ck-lctl-body { padding: 2px 12px 11px; display: none; flex-direction: column; gap: 8px; }
+.ck-lctl.open .ck-lctl-body { display: flex; }
+.ck-lctl-empty { font-size: 12px; color: var(--text-tertiary); padding: 4px 0; }
+.ck-lctl-msg { font-size: 11px; color: var(--text-tertiary); min-height: 13px; }
+.ck-lctl-msg.err { color: var(--red); }
+.ck-lctl-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-left: 3px solid var(--border-subtle); border-radius: var(--radius); padding: 9px 11px; }
+.ck-lctl-card.warn { border-left-color: var(--yellow-text); }
+.ck-lctl-card.crit { border-left-color: var(--red); }
+.ck-lctl-card.terminal { opacity: 0.6; }
+.ck-lctl-card-head { display: flex; align-items: center; gap: 7px; margin-bottom: 2px; }
+.ck-lctl-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.ck-lctl-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; margin-left: auto; flex: none; }
+.ck-lctl-badge.running { background: var(--green-soft); color: var(--accent-text); }
+.ck-lctl-badge.paused { background: var(--yellow-soft); color: var(--yellow-text); }
+.ck-lctl-badge.stopped, .ck-lctl-badge.completed { background: var(--bg-hover); color: var(--text-tertiary); }
+.ck-lctl-meta { font-size: 11px; color: var(--text-tertiary); margin-bottom: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+.ck-lctl-gauges { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.ck-lctl-gauge { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.ck-lctl-gauge-label { color: var(--text-tertiary); flex: none; min-width: 64px; letter-spacing: .02em; }
+.ck-lctl-bar { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; }
+.ck-lctl-fill { height: 100%; border-radius: 3px; background: var(--green); }
+.ck-lctl-fill.warn { background: var(--yellow); }
+.ck-lctl-fill.crit { background: var(--red); }
+.ck-lctl-fill.info { background: var(--accent); }
+.ck-lctl-gauge-val { color: var(--text-secondary); font-variant-numeric: tabular-nums; flex: none; min-width: 84px; text-align: right; }
+.ck-lctl-spark { margin-bottom: 8px; }
+.ck-lctl-spark-label { font-size: 10px; color: var(--text-tertiary); letter-spacing: .03em; margin-bottom: 3px; }
+.ck-lctl-spark-svg { width: 100%; height: 22px; display: block; background: var(--bg-hover); border-radius: 4px; }
+.ck-lctl-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.ck-lctl-verdict { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.ck-lctl-verdict-rec { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; text-transform: uppercase; letter-spacing: .03em; background: var(--bg-hover); color: var(--text-secondary); }
+.ck-lctl-verdict-rec.accept { background: var(--green-soft); color: var(--accent-text); }
+.ck-lctl-verdict-rec.retry { background: var(--yellow-soft); color: var(--yellow-text); }
+.ck-lctl-verdict-rec.escalate { background: var(--red-soft); color: var(--red); }
+.ck-lctl-verdict-status { font-size: 11px; color: var(--text-tertiary); }
+.ck-lctl-actions { display: flex; gap: 6px; }
+.ck-lctl-btn { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 6px; cursor: pointer; }
+.ck-lctl-btn:hover:not(:disabled) { border-color: var(--accent-text); color: var(--accent-text); }
+.ck-lctl-btn:disabled { opacity: 0.4; cursor: default; }
+.ck-lctl-btn.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+/* ===== Operator Approvals panel (Phase 5 HITL — integration) ===== */
+/* Self-contained sibling to ck-lctl: the human-in-the-loop queue for escalated loops. */
+.ck-appr { flex: none; border-bottom: 1px solid var(--border-subtle); background: var(--bg-raised); }
+.ck-appr-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; user-select: none; }
+.ck-appr-head .ck-appr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); flex: none; }
+.ck-appr-head .ck-appr-dot.pending { background: var(--red); }
+.ck-appr-title { font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.ck-appr-count { font-size: 11px; color: var(--text-tertiary); }
+.ck-appr-count.pending { color: var(--red); font-weight: 600; }
+.ck-appr-caret { margin-left: auto; color: var(--text-tertiary); font-size: 10px; transition: transform .15s; }
+.ck-appr.open .ck-appr-caret { transform: rotate(90deg); }
+.ck-appr-body { padding: 2px 12px 11px; display: none; flex-direction: column; gap: 8px; }
+.ck-appr.open .ck-appr-body { display: flex; }
+.ck-appr-empty { font-size: 12px; color: var(--text-tertiary); padding: 4px 0; }
+.ck-appr-msg { font-size: 11px; color: var(--text-tertiary); min-height: 13px; }
+.ck-appr-msg.err { color: var(--red); }
+.ck-appr-card { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-left: 3px solid var(--red); border-radius: var(--radius); padding: 9px 11px; }
+.ck-appr-cardhead { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.ck-appr-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.ck-appr-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; margin-left: auto; flex: none; background: var(--red-soft); color: var(--red); text-transform: uppercase; letter-spacing: .03em; }
+.ck-appr-verdict { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; margin-bottom: 5px; }
+.ck-appr-rec { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; text-transform: uppercase; letter-spacing: .03em; background: var(--red-soft); color: var(--red); }
+.ck-appr-vstatus { color: var(--text-tertiary); }
+.ck-appr-gap { color: var(--text-secondary); }
+.ck-appr-reason { font-size: 12px; color: var(--text-secondary); margin-bottom: 7px; }
+.ck-appr-rationale { font-size: 11px; color: var(--text-tertiary); border-left: 2px solid var(--border-subtle); padding-left: 8px; margin-bottom: 7px; }
+.ck-appr-meta { font-size: 10px; color: var(--text-tertiary); margin-bottom: 7px; }
+.ck-appr-actions { display: flex; gap: 6px; }
+.ck-appr-btn { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 6px; cursor: pointer; }
+.ck-appr-btn:disabled { opacity: 0.4; cursor: default; }
+.ck-appr-btn.approve:hover:not(:disabled) { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); }
+.ck-appr-btn.reject:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+/* Interactive terminal — in-place takeover of the radio chat/message area.
+   The panel markup lives inside .message-area (dashboard.ts) so the terminal
+   REPLACES the message list + composer while the sidebar (channels + On-Air
+   roster) and task board stay visible. Backend ticket/WS flow is unchanged —
+   only the mount + chrome moved off the old centered modal. (.message-area is
+   position:relative so this absolute panel fills exactly the chat column.) */
+.ck-inst-name.ck-term-open { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.ck-inst-name.ck-term-open:hover { color: var(--accent-text); }
+.ck-term-overlay { position: absolute; inset: 0; z-index: 30; background: #FEFCF6; display: none; flex-direction: column; }
+.ck-term-overlay.open { display: flex; }
+/* No terminal-local chrome: the body fills the whole takeover. The active agent
+   name + connection status surface on the MAIN app header (#term-active-label);
+   exit/restore is channel-click or Esc (no in-panel Close/Release buttons). */
+.ck-term-modal { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ck-term-body { flex: 1; min-height: 0; padding: 6px; background: #FEFCF6; }
+.ck-term-body .xterm { height: 100%; }
+/* MOBILE: the terminal stays an in-place takeover of the chat column
+   (.message-area) at ALL widths — it never goes whole-screen. The header + top
+   menu / channel nav sit OUTSIDE .message-area, so they stay visible exactly like
+   the normal chat view (operator can still open the channel drawer + navigate). */
 `;
 }
 
@@ -303,7 +436,7 @@ export function cockpitMarkup(): string {
 <div id="cockpit">
   <div class="ck-bar">
     <div class="ck-main-toggle">
-      <button class="ck-main-btn active" data-main="live">Live</button>
+      <button class="ck-main-btn active" data-main="loop">Loop</button>
       <button class="ck-main-btn" data-main="plan">Plan</button>
     </div>
     <div class="ck-proj">
@@ -323,6 +456,7 @@ export function cockpitMarkup(): string {
       </div>
     </div>
     <button class="ck-launch-ref" id="ck-launch-ref" title="Spawn a headless referee on this hub (tmux)">+ Referee</button>
+    <button class="ck-appr-badge" id="ck-appr-badge" style="display:none" title="Pending approvals — open the Loop page">⚠ approvals <span id="ck-appr-badge-n">0</span></button>
     <div id="ck-conn" class="ck-conn"><span class="dot"></span><span id="ck-conn-text">live</span></div>
   </div>
   <div id="ck-cond" class="ck-cond">
@@ -354,7 +488,33 @@ export function cockpitMarkup(): string {
       <div class="ck-cond-msg" id="ck-cond-msg"></div>
     </div>
   </div>
-  <div id="ck-view-live"></div>
+  <div id="ck-view-loop">
+    <div id="ck-lctl" class="ck-lctl open">
+      <div class="ck-lctl-head" id="ck-lctl-head">
+        <span class="ck-lctl-dot" id="ck-lctl-dot"></span>
+        <span class="ck-lctl-title">Loop Control</span>
+        <span class="ck-lctl-count" id="ck-lctl-count"></span>
+        <span class="ck-lctl-caret" id="ck-lctl-caret">▸</span>
+      </div>
+      <div class="ck-lctl-body" id="ck-lctl-body">
+        <div id="ck-lctl-list"></div>
+        <div class="ck-lctl-msg" id="ck-lctl-msg"></div>
+      </div>
+    </div>
+    <div id="ck-loops" class="ck-loops"></div>
+    <div id="ck-appr" class="ck-appr open">
+      <div class="ck-appr-head" id="ck-appr-head">
+        <span class="ck-appr-dot" id="ck-appr-dot"></span>
+        <span class="ck-appr-title">Approvals</span>
+        <span class="ck-appr-count" id="ck-appr-count"></span>
+        <span class="ck-appr-caret" id="ck-appr-caret">▸</span>
+      </div>
+      <div class="ck-appr-body" id="ck-appr-body">
+        <div id="ck-appr-list"></div>
+        <div class="ck-appr-msg" id="ck-appr-msg"></div>
+      </div>
+    </div>
+  </div>
   <div id="ck-plan-wrap">
     <div class="ck-tabs">
       <button class="ck-tab active" data-view="ops">Right Now<span class="n" id="ck-n-ops"></span></button>
@@ -378,17 +538,23 @@ export function cockpitMarkup(): string {
   </div>
   <div class="ck-drawer-body" id="ck-drawer-body"></div>
 </aside>
+<!-- Interactive terminal panel markup now lives INSIDE .message-area in
+     dashboard.ts so it takes over the radio chat area in place (not this old
+     body-level modal). openTerminal/closeTerminal still bind it by id via
+     $ = getElementById, so the move is transparent to the terminal logic below. -->
 `;
 }
 
 // The browser script. Exposes window.__cockpit = { onPlanUpdate, onReconnect, show, hide }.
-// adminToken threads the operator-control Bearer token into the cockpit's own scope so its
+// `token` threads the operator-control Bearer token into the cockpit's own scope so its
 // admin POSTs (launch-referee, conductor config/start/stop, fleet-max, pin) are gated exactly
-// like the dashboard. The PROD call-site (dashboard.ts getDashboardHTML) passes the real token;
-// the default "" (no-arg test path) yields an empty Bearer → 401 fail-SAFE, never fail-open.
-// Function-replacer (not a string pattern) so a "$"-bearing token is inserted verbatim.
-export function cockpitScript(adminToken: string = ""): string {
-  return COCKPIT_SCRIPT.replace("__WT_ADMIN_TOKEN__", function () { return adminToken; });
+// like the dashboard. The PROD call-site (dashboard.ts getDashboardHTML) now passes the SCOPED
+// cockpit token (A3-a), NOT the raw admin token — the hub accepts the scoped token on those
+// admin routes. The default "" (no-arg test path) yields an empty Bearer → 401 fail-SAFE,
+// never fail-open. Function-replacer (not a string pattern) so a "$"-bearing token is inserted
+// verbatim.
+export function cockpitScript(token: string = ""): string {
+  return COCKPIT_SCRIPT.replace("__WT_ADMIN_TOKEN__", () => token);
 }
 
 const COCKPIT_SCRIPT = String.raw`
@@ -550,16 +716,17 @@ const COCKPIT_SCRIPT = String.raw`
   // ========== verbatim copy of cockpit-live.ts ==========
   // KEEP IDENTICAL to cockpit-live.ts.
   // stale is server-computed (PRESENCE_GRACE_MS threshold, matches ghost-reaper).
-  // WS2 context gauge — mirrors the FROZEN consumer contract. Bar max = the over (auto-compact) trigger so a full bar reads as "act now".
+  // WS2 context gauge — mirrors the FROZEN consumer contract. FILL ceiling = CONTEXT_OVER (the 400k context limit / auto-compact line) so a full bar reads as "act now".
+  // Color bands by ABSOLUTE tokens: green <CONTEXT_WARN (300k), amber 300k–360k, red ≥CONTEXT_RED (360k) — red fires BEFORE the 400k compact line for early warning.
   // Constant names + VALUES are kept identical to the classic board render in dashboard.ts so the two views can never disagree on a band or on "ts-stale".
-  var CONTEXT_OVER = 400000, CONTEXT_WARN = 320000, CONTEXT_STALE_MS = 120000;
+  var CONTEXT_OVER = 400000, CONTEXT_RED = 360000, CONTEXT_WARN = 300000, CONTEXT_STALE_MS = 120000;
   function fmtCtx(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n); }
   // v2 lockstep rule (ratified with dashboard.ts renderBoard): a parked-but-alive agent's count is still accurate, so don't grey it.
   // presenceLive = online && !presence-stale. ts-stale only means "untrusted" when presence is ALSO gone.
   function ctxBand(tokens, ts, now, presenceLive) {
     if (tokens == null || ts == null) return { cls: "pending", val: "pending", pct: 0 };
     var pct = Math.min(100, Math.round(tokens / CONTEXT_OVER * 100));
-    var base = tokens >= CONTEXT_OVER ? "red" : tokens >= CONTEXT_WARN ? "amber" : "green";
+    var base = tokens >= CONTEXT_RED ? "red" : tokens >= CONTEXT_WARN ? "amber" : "green";
     if (now - ts > CONTEXT_STALE_MS) {
       // gauge frozen: alive→keep true color + mark parked (count valid); dead→grey (value untrusted). Conductor stays ts-keyed regardless.
       return presenceLive
@@ -567,6 +734,24 @@ const COCKPIT_SCRIPT = String.raw`
         : { cls: "stale", val: fmtCtx(tokens), pct: pct };
     }
     return { cls: base, val: fmtCtx(tokens), pct: pct };
+  }
+  // Shared context-gauge renderer. compact (board chips + Right-Now rail) = bar only,
+  // full count on hover, and returns null when there's no reading yet (empty/hidden
+  // bar until tokens report). Non-compact (Live cards) keeps the "ctx" label + value.
+  function renderCtxBar(tokens, ts, now, presenceLive, compact) {
+    var cb = ctxBand(tokens, ts, now, presenceLive);
+    if (compact && cb.cls === "pending") return null;
+    var ctx = el("div", "ck-live-ctx " + cb.cls + (compact ? " ck-ctx-compact" : ""));
+    ctx.title = (tokens != null ? tokens.toLocaleString() + " tokens" : "context pending")
+      + (cb.cls.indexOf("stale") >= 0 ? " (stale — agent gone)" : cb.cls.indexOf("parked") >= 0 ? " (parked — agent quiet, count current)" : "");
+    if (!compact) ctx.appendChild(el("span", "ck-live-ctx-label", "ctx"));
+    if (cb.cls !== "pending") {
+      var ctxBar = el("div", "ck-live-ctx-bar");
+      var ctxFill = el("div", "ck-live-ctx-fill"); ctxFill.style.width = cb.pct + "%";
+      ctxBar.appendChild(ctxFill); ctx.appendChild(ctxBar);
+    }
+    if (!compact) ctx.appendChild(el("span", "ck-live-ctx-val", cb.val));
+    return ctx;
   }
 
   function buildLiveModel(board) {
@@ -591,6 +776,63 @@ const COCKPIT_SCRIPT = String.raw`
       });
   }
 
+  // ========== verbatim copy of cockpit-loops.ts ==========
+  // KEEP IDENTICAL to cockpit-loops.ts. Pure loop view-model + cap-pressure: derives
+  // the iteration/token/time/completeness gauges and ONE danger level (worst of the
+  // resource caps; completeness never drives danger) for the operator Loops panel.
+  var LOOP_WARN_AT = 0.75, LOOP_CRIT_AT = 0.9;
+  function loopFmtInt(n) { return n >= 1000 ? Math.round(n / 1000) + "k" : String(n); }
+  function loopFmtDuration(ms) {
+    var t = ms < 0 ? 0 : ms;
+    var totalSec = Math.floor(t / 1000); var sec = totalSec % 60;
+    var totalMin = Math.floor(totalSec / 60); var min = totalMin % 60;
+    var hr = Math.floor(totalMin / 60);
+    function p2(n) { return n < 10 ? "0" + n : "" + n; }
+    return hr > 0 ? hr + ":" + p2(min) + ":" + p2(sec) : min + ":" + p2(sec);
+  }
+  function loopRatio(value, cap) { if (cap == null || cap <= 0) return null; return value / cap; }
+  function buildLoopView(loop, now) {
+    var cfg = loop.config || {}; var st = loop.state || {};
+    var iterN = typeof st.iterations === "number" ? st.iterations : 0;
+    var tokN = typeof st.tokens === "number" ? st.tokens : 0;
+    var elapsed = now - loop.created_at;
+    var iterRatio = loopRatio(iterN, cfg.max_iterations);
+    var tokRatio = loopRatio(tokN, cfg.token_budget);
+    var timeRatio = loopRatio(elapsed, cfg.wall_clock_timeout_ms);
+    var iter = { ratio: iterRatio, shown: cfg.max_iterations != null, label: cfg.max_iterations != null ? iterN + " / " + cfg.max_iterations : String(iterN) };
+    var tokens = { ratio: tokRatio, shown: cfg.token_budget != null, label: cfg.token_budget != null ? loopFmtInt(tokN) + " / " + loopFmtInt(cfg.token_budget) : loopFmtInt(tokN) };
+    var time = { ratio: timeRatio, shown: cfg.wall_clock_timeout_ms != null, label: cfg.wall_clock_timeout_ms != null ? loopFmtDuration(elapsed) + " / " + loopFmtDuration(cfg.wall_clock_timeout_ms) : loopFmtDuration(elapsed) };
+    var lc = typeof st.last_completeness === "number" ? st.last_completeness : null;
+    var completeness = { ratio: lc, shown: lc != null, label: lc != null ? Math.round(lc * 100) + "%" + (cfg.completeness_threshold != null ? " / " + Math.round(cfg.completeness_threshold * 100) + "%" : "") : "—" };
+    var worst = 0;
+    var terminal = loop.status === "stopped" || loop.status === "completed";
+    if (!terminal) { [iterRatio, tokRatio, timeRatio].forEach(function (r) { if (r != null && r > worst) worst = r; }); }
+    var pressure = worst >= LOOP_CRIT_AT ? "crit" : worst >= LOOP_WARN_AT ? "warn" : "ok";
+    var scores = Array.isArray(st.scores) ? st.scores.filter(function (n) { return typeof n === "number"; }) : [];
+    var verdict = st.last_verdict && typeof st.last_verdict === "object" ? st.last_verdict : null;
+    return { id: loop.id, label: loop.label, kind: loop.kind, owner: loop.owner_callsign, status: loop.status, stop_reason: loop.stop_reason != null ? loop.stop_reason : null, active: loop.status === "running" || loop.status === "paused", iter: iter, tokens: tokens, time: time, completeness: completeness, pressure: pressure, pressureRatio: worst > 1 ? 1 : worst, scores: scores, verdict: verdict };
+  }
+  function loopSparkPath(scores, w, h) {
+    if (!Array.isArray(scores) || scores.length < 2) return "";
+    var n = scores.length, d = "";
+    for (var i = 0; i < n; i++) {
+      var raw = scores[i]; var v = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+      var x = (i / (n - 1)) * w; var y = h - v * h;
+      d += (i === 0 ? "M" : " L") + Math.round(x * 100) / 100 + "," + Math.round(y * 100) / 100;
+    }
+    return d;
+  }
+  function loopGroupRank(status) { if (status === "running") return 0; if (status === "paused") return 1; return 2; }
+  function buildLoopViews(loops, now) {
+    if (!Array.isArray(loops)) return [];
+    return loops.map(function (l) { return buildLoopView(l, now); }).sort(function (a, b) {
+      var ga = loopGroupRank(a.status), gb = loopGroupRank(b.status);
+      if (ga !== gb) return ga - gb;
+      if (a.pressureRatio !== b.pressureRatio) return b.pressureRatio - a.pressureRatio;
+      return 0;
+    });
+  }
+
   // ========== helpers ==========
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
   function relTime(ms, now) {
@@ -609,10 +851,13 @@ const COCKPIT_SCRIPT = String.raw`
     projectId: "__demo__", demo: true, model: null, leaseOffset: 0, feed: [],
     openLanes: null, activeView: "ops", refetchTimer: null, drawerTaskId: null, projectsLoaded: false,
     feedFilter: "all", feedNewCount: 0, feedPrevLen: null,
-    mainView: "live", liveEntries: [], liveOffset: 0, liveRefetchTimer: null,
+    mainView: "loop",
     stalledSet: {}, // C5: task ids currently flagged stalled, for tick-driven badge toggling
     wedged: [], wedgedSet: {}, // W4.1-a: dead-blocker-wedged tasks (this project) + id→deadBlockers lookup
-    conductor: null, condPollTimer: null, condPinLoaded: false // WS-C: last /admin-conductor-status snapshot + poll handle; condPinLoaded gates Armed (C5)
+    conductor: null, condPollTimer: null, condPinLoaded: false, // WS-C: last /admin-conductor-status snapshot + poll handle; condPinLoaded gates Armed (C5)
+    loopCtl: [], loopCtlTimer: null, // Phase 2: last /loop-admin-list view-models + poll handle
+    appr: [], apprTimer: null, // Phase 5 (integration): pending HITL approvals + poll handle
+    ctxBySid: {} // per-owner context gauge (sid → {tokens,ts,online,stale}) for board-chip + rail bars
   };
   var FEED_LIMIT = 200;
   function $(id) { return document.getElementById(id); }
@@ -622,128 +867,148 @@ const COCKPIT_SCRIPT = String.raw`
     var MIN = 60000;
     function t(o) { o.project_id = "__demo__"; if (o.parent_id === undefined) o.parent_id = null; if (o.detail === undefined) o.detail = null; if (o.owner === undefined) o.owner = null; if (o.owner_sid === undefined) o.owner_sid = null; if (o.priority === undefined) o.priority = 2; o.artifacts = o.artifacts || null; if (o.claimed_at === undefined) o.claimed_at = null; if (o.done_at === undefined) o.done_at = null; if (o.lease_expires_at === undefined) o.lease_expires_at = null; o.created_at = o.created_at || (now - 90 * MIN); o.updated_at = now; return o; }
     var lanes = {
-      proposed: [ t({ id: "site-synth", title: "Site survey synthesis", priority: 1 }), t({ id: "mood", title: "Client mood-board review", priority: 3 }) ],
-      ratified: [ t({ id: "permit-mtx", title: "Permit scope matrix", priority: 1 }) ],
-      ready: [ t({ id: "grading", title: "Grading & drainage plan", priority: 0 }), t({ id: "plants", title: "Plant schedule v2", priority: 2 }) ],
-      claimed: [ t({ id: "irrig", title: "Irrigation zoning", owner: "linux-pie", owner_sid: "s-pie", priority: 1, claimed_at: now - 30 * MIN, lease_expires_at: now - 25000 }) ],
+      proposed: [ t({ id: "api-design", title: "API contract design", priority: 1 }), t({ id: "design-review", title: "Design doc review", priority: 3 }) ],
+      ratified: [ t({ id: "schema-plan", title: "Schema migration plan", priority: 1 }) ],
+      ready: [ t({ id: "db-migrate", title: "Database migration", priority: 0 }), t({ id: "seed-data", title: "Seed data v2", priority: 2 }) ],
+      claimed: [ t({ id: "auth", title: "Refactor auth flow", owner: "linux-web", owner_sid: "s-web", priority: 1, claimed_at: now - 30 * MIN, lease_expires_at: now - 25000 }) ],
       in_progress: [
-        t({ id: "hardscape", title: "Hardscape layout", owner: "linux-255c", owner_sid: "s-255c", priority: 0, claimed_at: now - 12 * MIN, lease_expires_at: now + 40000 }),
-        t({ id: "lighting", title: "Landscape lighting plan", owner: "linux-d4aa", owner_sid: "s-d4aa", priority: 2, claimed_at: now - 6 * MIN, lease_expires_at: now + 12 * MIN })
+        t({ id: "ratelimit", title: "Add API rate limiting", owner: "linux-255c", owner_sid: "s-255c", priority: 0, claimed_at: now - 12 * MIN, lease_expires_at: now + 40000 }),
+        t({ id: "search", title: "Search indexing", owner: "linux-d4aa", owner_sid: "s-d4aa", priority: 2, claimed_at: now - 6 * MIN, lease_expires_at: now + 12 * MIN })
       ],
-      review: [ t({ id: "drainage-calc", title: "Drainage volume calc", owner: "linux-fieldbook", owner_sid: "s-fb", priority: 1, claimed_at: now - 20 * MIN }) ],
-      blocked: [ t({ id: "cost-est", title: "Final cost estimate", priority: 0 }) ],
-      done: [ t({ id: "topo", title: "Topo import", priority: 2, done_at: now - 70 * MIN }), t({ id: "trees", title: "Tree inventory", priority: 2, done_at: now - 60 * MIN }),
-        t({ id: "patio", title: "Patio detail", parent_id: "hardscape", priority: 2, done_at: now - 15 * MIN }) ],
+      review: [ t({ id: "token-refresh", title: "Token refresh handling", owner: "linux-api", owner_sid: "s-api", priority: 1, claimed_at: now - 20 * MIN }) ],
+      blocked: [ t({ id: "release", title: "Release candidate cut", priority: 0 }) ],
+      done: [ t({ id: "logging", title: "Structured logging", priority: 2, done_at: now - 70 * MIN }), t({ id: "metrics", title: "Metrics export", priority: 2, done_at: now - 60 * MIN }),
+        t({ id: "cache-detail", title: "Response cache headers", parent_id: "ratelimit", priority: 2, done_at: now - 15 * MIN }) ],
       failed: [],
-      abandoned: [ t({ id: "concept-a", title: "Concept A (rejected)", priority: 4 }) ]
+      abandoned: [ t({ id: "legacy-rewrite", title: "Legacy rewrite (rejected)", priority: 4 }) ]
     };
-    // a second child of hardscape, still in progress (drives the child rollup 2/1/1)
-    lanes.in_progress.push(t({ id: "retwall", title: "Retaining wall detail", parent_id: "hardscape", owner: "linux-255c", owner_sid: "s-255c", priority: 1, claimed_at: now - 9 * MIN, lease_expires_at: now + 8 * MIN }));
+    // a second child of ratelimit, still in progress (drives the child rollup 2/1/1)
+    lanes.in_progress.push(t({ id: "quota-detail", title: "Per-key quota buckets", parent_id: "ratelimit", owner: "linux-255c", owner_sid: "s-255c", priority: 1, claimed_at: now - 9 * MIN, lease_expires_at: now + 8 * MIN }));
     // Stamp each task's status from its lane (real /plan-board rows carry status;
     // the fixture derives it from lane membership so the model reads it correctly).
     Object.keys(lanes).forEach(function (k) { lanes[k].forEach(function (task) { task.status = k; }); });
     var deps = [
-      { task_id: "hardscape", blocks_on: "grading" },
-      { task_id: "cost-est", blocks_on: "grading" }, { task_id: "cost-est", blocks_on: "plants" },
-      { task_id: "cost-est", blocks_on: "hardscape" }, { task_id: "cost-est", blocks_on: "irrig" }
+      { task_id: "ratelimit", blocks_on: "db-migrate" },
+      { task_id: "release", blocks_on: "db-migrate" }, { task_id: "release", blocks_on: "seed-data" },
+      { task_id: "release", blocks_on: "ratelimit" }, { task_id: "release", blocks_on: "auth" }
     ];
-    var childSummaries = { hardscape: { total: 2, terminal: 1, done: 1 } };
+    var childSummaries = { ratelimit: { total: 2, terminal: 1, done: 1 } };
     var events = [
-      { id: 1, task_id: "topo", ts: now - 70 * MIN, actor: "linux-255c", kind: "transition", from_status: "in_progress", to_status: "done", note: null },
-      { id: 2, task_id: "trees", ts: now - 60 * MIN, actor: "linux-fieldbook", kind: "transition", from_status: "review", to_status: "done", note: null },
-      { id: 3, task_id: "hardscape", ts: now - 12 * MIN, actor: "linux-255c", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 4, task_id: "hardscape", ts: now - 12 * MIN, actor: "linux-255c", kind: "transition", from_status: "claimed", to_status: "in_progress", note: null },
-      { id: 5, task_id: "lighting", ts: now - 6 * MIN, actor: "linux-d4aa", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 6, task_id: "drainage-calc", ts: now - 20 * MIN, actor: "linux-fieldbook", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 7, task_id: "drainage-calc", ts: now - 4 * MIN, actor: "linux-fieldbook", kind: "handoff", from_status: null, to_status: null, note: JSON.stringify({ summary: "Calc'd peak runoff for 25-yr storm; needs a second reviewer to sanity-check the C-values before sign-off.", next_step: "Verify runoff coefficients against the soil report", blockers: [] }) },
-      { id: 8, task_id: "cost-est", ts: now - 3 * MIN, actor: "linux-d4aa", kind: "transition", from_status: "ready", to_status: "blocked", note: null },
-      { id: 9, task_id: "irrig", ts: now - 30 * MIN, actor: "linux-pie", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 10, task_id: "irrig", ts: now - 20000, actor: "system", kind: "lease_expired", from_status: null, to_status: null, note: JSON.stringify({ summary: "Lease expired — reclaim pending on next sweep.", system: true }) }
+      { id: 1, task_id: "logging", ts: now - 70 * MIN, actor: "linux-255c", kind: "transition", from_status: "in_progress", to_status: "done", note: null },
+      { id: 2, task_id: "metrics", ts: now - 60 * MIN, actor: "linux-api", kind: "transition", from_status: "review", to_status: "done", note: null },
+      { id: 3, task_id: "ratelimit", ts: now - 12 * MIN, actor: "linux-255c", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
+      { id: 4, task_id: "ratelimit", ts: now - 12 * MIN, actor: "linux-255c", kind: "transition", from_status: "claimed", to_status: "in_progress", note: null },
+      { id: 5, task_id: "search", ts: now - 6 * MIN, actor: "linux-d4aa", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
+      { id: 6, task_id: "token-refresh", ts: now - 20 * MIN, actor: "linux-api", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
+      { id: 7, task_id: "token-refresh", ts: now - 4 * MIN, actor: "linux-api", kind: "handoff", from_status: null, to_status: null, note: JSON.stringify({ summary: "Implemented token refresh; needs a reviewer to check the 401 retry path before sign-off.", next_step: "Verify the refresh-token rotation", blockers: [] }) },
+      { id: 8, task_id: "release", ts: now - 3 * MIN, actor: "linux-d4aa", kind: "transition", from_status: "ready", to_status: "blocked", note: null },
+      { id: 9, task_id: "auth", ts: now - 30 * MIN, actor: "linux-web", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
+      { id: 10, task_id: "auth", ts: now - 20000, actor: "system", kind: "lease_expired", from_status: null, to_status: null, note: JSON.stringify({ summary: "Lease expired — reclaim pending on next sweep.", system: true }) }
     ];
     var presence = [
-      { sid: "s-255c", name: "linux-255c", online: true, lastSeenAt: now - 20000 },
+      // contextTokens/contextTs seed the per-agent gauge so the demo exercises every band: green / amber / red / stale-grey.
+      { sid: "s-255c", name: "linux-255c", online: true, lastSeenAt: now - 20000, contextTokens: 175000, contextTs: now - 10000 },
       // C5 demo: d4aa holds a healthy 12min lease but hasn't beat in ~6min → stalled radar.
-      { sid: "s-d4aa", name: "linux-d4aa", online: true, lastSeenAt: now - 6 * MIN },
-      { sid: "s-fb", name: "linux-fieldbook", online: true, lastSeenAt: now - 15000 },
-      { sid: "s-pie", name: "linux-pie", online: false, lastSeenAt: now - 30 * MIN }
+      { sid: "s-d4aa", name: "linux-d4aa", online: true, lastSeenAt: now - 6 * MIN, contextTokens: 312000, contextTs: now - 10000 },
+      { sid: "s-api", name: "linux-api", online: true, lastSeenAt: now - 15000, contextTokens: 372000, contextTs: now - 10000 },
+      { sid: "s-web", name: "linux-web", online: false, lastSeenAt: now - 30 * MIN, contextTokens: 240000, contextTs: now - 5 * MIN }
     ];
-    return { board: { project: { id: "__demo__", title: "Garden of Bloom — Riverside Estate", status: "active" }, lanes: lanes, deps: deps, childSummaries: childSummaries, now: now }, events: events, presence: presence };
+    return { board: { project: { id: "__demo__", title: "Acme Platform — API Rewrite", status: "active" }, lanes: lanes, deps: deps, childSummaries: childSummaries, now: now }, events: events, presence: presence };
   }
 
-  // ========== live fleet data + render ==========
-  function loadLiveData(cb) {
-    fetch("/board").then(function(r) { return r.ok ? r.json() : { board: [], now: Date.now() }; }).catch(function() { return { board: [], now: Date.now() }; }).then(function(j) {
-      var now = typeof j.now === "number" ? j.now : Date.now();
-      S.liveOffset = serverClockOffset(now, Date.now());
-      S.liveEntries = buildLiveModel(Array.isArray(j.board) ? j.board : []);
-      if (cb) cb();
-    });
+  // ========== live fleet cards: REMOVED ==========
+  // The "Live" page (per-instance fleet cards) was retired and its page slot repurposed
+  // as the "Loop" page (loop control + schedule + approvals). The cards duplicated the
+  // Plan "Right Now" rail. renderLoopsSchedule (below) now runs on the loop-ctl cadence
+  // (see initLoopCtl), not the old live cadence. (buildLiveModel is now unused.)
+  // ========== Phase 3: governed-loop schedule card (scheduled-vs-actual fire times) ==========
+  // Self-contained ck-loops block. Reads the public /loops DTO (summarizeLoopSchedule) and
+  // shows, per recurring loop, the scheduled NEXT fire vs the LAST actual fire and the drift
+  // between them. Fully guarded: any error/empty set renders nothing, so it can never break the
+  // rest of the Live view. (P2's control card is the separate ck-lctl block.)
+  function fmtDur(ms) {
+    if (ms == null) return "—";
+    if (Math.abs(ms) < 1000) return Math.round(ms) + "ms";
+    var s = Math.round(ms / 1000);
+    if (Math.abs(s) < 60) return s + "s";
+    var m = Math.floor(Math.abs(s) / 60), r = Math.abs(s) % 60;
+    return (s < 0 ? "-" : "") + m + "m" + (r < 10 ? "0" : "") + r + "s";
   }
-  function scheduleLiveRefetch() {
-    if (S.liveRefetchTimer) return;
-    S.liveRefetchTimer = setTimeout(function() { S.liveRefetchTimer = null; loadLiveData(renderLive); }, 350);
+  function loopDriftCls(ms) {
+    if (ms == null) return "";
+    var a = Math.abs(ms);
+    return a < 1000 ? "ok" : a < 5000 ? "warn" : "bad";
   }
-  function renderLive() {
-    var v = $("ck-view-live"); if (!v) return; v.textContent = "";
-    if (!S.liveEntries.length) { v.appendChild(emptyState("No instances online.", "The Live view shows each Claude instance's mission, activity, and todos as they run.")); return; }
-    var now = Date.now() + S.liveOffset; // server-aligned clock for context_ts liveness
-    S.liveEntries.forEach(function(e) {
-      var dot = e.stale ? "stale" : (e.online ? "online" : "");
-      var badge = e.stale ? "ghost" : (e.online ? "live" : "offline");
-      var cardCls = "ck-live-card" + (e.stale ? " stale" : "") + (!e.online ? " offline" : "");
-      var card = el("div", cardCls);
-      // Header
-      var head = el("div", "ck-live-head");
-      head.appendChild(el("span", "dot" + (dot ? " " + dot : "")));
-      head.appendChild(el("span", "ck-live-name", e.name));
-      if (e.node) head.appendChild(el("span", "ck-live-node", e.node));
-      head.appendChild(el("span", "ck-live-badge " + badge, badge));
-      card.appendChild(head);
-      // WS2 context gauge — poll-on-nudge source is the /board join; null fields => pending pill, no false zero.
-      var presenceLive = e.online && !e.stale; // v2: parked-but-alive keeps its color; only !presenceLive ts-stale greys.
-      var cb = ctxBand(e.contextTokens, e.contextTs, now, presenceLive);
-      var ctx = el("div", "ck-live-ctx " + cb.cls);
-      ctx.appendChild(el("span", "ck-live-ctx-label", "ctx"));
-      if (cb.cls !== "pending") {
-        var ctxBar = el("div", "ck-live-ctx-bar");
-        var ctxFill = el("div", "ck-live-ctx-fill"); ctxFill.style.width = cb.pct + "%";
-        ctxBar.appendChild(ctxFill); ctx.appendChild(ctxBar);
-      }
-      ctx.appendChild(el("span", "ck-live-ctx-val", cb.val));
-      card.appendChild(ctx);
-      // Mission
-      if (e.mission) card.appendChild(el("div", "ck-live-mission", e.mission));
-      // Activity (▸ now)
-      if (e.activity) {
-        var act = el("div", "ck-live-activity");
-        act.appendChild(el("span", "ck-live-act-icon", "▸"));
-        act.appendChild(document.createTextNode(e.activity));
-        card.appendChild(act);
-      }
-      // Todo checklist
-      if (e.todos && e.todos.length) {
-        var todoWrap = el("div", "ck-live-todos");
-        e.todos.forEach(function(t) {
-          var cls = "ck-live-todo" + (t.status === "completed" ? " done" : t.status === "in_progress" ? " inprog" : "");
-          var row = el("div", cls);
-          var icon = t.status === "completed" ? "☑" : t.status === "in_progress" ? "◈" : "☐";
-          row.appendChild(el("span", "ck-live-todo-icon", icon));
-          row.appendChild(el("span", "ck-live-todo-text", t.content));
-          todoWrap.appendChild(row);
-        });
-        card.appendChild(todoWrap);
-      }
-      // Subagent count
-      if (e.subagents > 0) card.appendChild(el("div", "ck-live-sub", e.subagents + " subagent" + (e.subagents !== 1 ? "s" : "")));
-      v.appendChild(card);
-    });
+  function renderLoopsSchedule() {
+    var host = $("ck-loops");
+    if (!host) return;
+    fetch("/loops").then(function (r) { return r.ok ? r.json() : { loops: [], now: Date.now() }; })
+      .catch(function () { return { loops: [], now: Date.now() }; })
+      .then(function (j) {
+        try {
+          host.textContent = "";
+          var loops = (j && Array.isArray(j.loops)) ? j.loops : [];
+          var srvNow = (j && typeof j.now === "number") ? j.now : Date.now();
+          var offset = srvNow - Date.now();
+          if (!loops.length) return; // nothing governed → render nothing
+          // recurring loops first (they carry schedule data), then the rest
+          loops = loops.slice().sort(function (a, b) { return (b.recurring ? 1 : 0) - (a.recurring ? 1 : 0); });
+          // Collapsible section (mirrors the Loop Control card): collapsed by default,
+          // state persisted in localStorage; header shows the loop count when collapsed.
+          var collapsed = true;
+          try { collapsed = localStorage.getItem("ck-loops-collapsed") !== "0"; } catch (e) {}
+          host.classList.toggle("open", !collapsed);
+          var lhdr = el("div", "ck-loops-hdr");
+          lhdr.appendChild(document.createTextNode("Governed loops"));
+          lhdr.appendChild(el("span", "ck-loops-count", "(" + loops.length + ")"));
+          lhdr.appendChild(el("span", "ck-loops-caret", "▸"));
+          lhdr.onclick = function () {
+            var willOpen = !host.classList.contains("open");
+            host.classList.toggle("open", willOpen);
+            try { localStorage.setItem("ck-loops-collapsed", willOpen ? "0" : "1"); } catch (e) {}
+          };
+          host.appendChild(lhdr);
+          var lbody = el("div", "ck-loops-body");
+          loops.forEach(function (lp) {
+            var now = Date.now() + offset; // server-aligned clock
+            var row = el("div", "ck-loops-row" + (lp.status !== "running" ? " done" : ""));
+            var head = el("div", "ck-loops-head");
+            head.appendChild(el("span", "ck-loops-label", lp.label || lp.id));
+            head.appendChild(el("span", "ck-loops-status " + lp.status, lp.status));
+            row.appendChild(head);
+            if (lp.recurring) {
+              var sched = el("div", "ck-loops-sched");
+              sched.appendChild(el("span", "ck-loops-int", "every " + fmtDur(lp.interval_ms)));
+              // scheduled next fire (or overdue)
+              var nextTxt, nextCls = "";
+              if (lp.next_fire_ms == null) { nextTxt = "next —"; }
+              else if (lp.overdue_ms != null && lp.overdue_ms > 0) { nextTxt = "overdue " + fmtDur(lp.overdue_ms); nextCls = "bad"; }
+              else { nextTxt = "next in " + fmtDur(lp.next_fire_ms - now); }
+              sched.appendChild(el("span", "ck-loops-next " + nextCls, nextTxt));
+              // last actual fire
+              sched.appendChild(el("span", "ck-loops-last", lp.last_fire_ms == null ? "no fire yet" : "fired " + fmtDur(now - lp.last_fire_ms) + " ago"));
+              // drift of the last actual fire vs its scheduled grid slot
+              if (lp.last_drift_ms != null) {
+                sched.appendChild(el("span", "ck-loops-drift " + loopDriftCls(lp.last_drift_ms), "drift +" + fmtDur(lp.last_drift_ms)));
+              }
+              row.appendChild(sched);
+            } else {
+              row.appendChild(el("div", "ck-loops-sched", "one-shot · " + (lp.iterations || 0) + " iters"));
+            }
+            lbody.appendChild(row);
+          });
+          host.appendChild(lbody);
+        } catch (e) { /* never break the live view */ }
+      });
   }
+
   function switchMainView(view) {
     S.mainView = view;
     document.querySelectorAll(".ck-main-btn").forEach(function(b) { b.classList.toggle("active", b.getAttribute("data-main") === view); });
-    document.body.classList.toggle("ck-main-live", view === "live");
-    if (view === "live") {
-      loadLiveData(renderLive);
+    document.body.classList.toggle("ck-main-loop", view === "loop");
+    if (view === "loop") {
+      // Refresh all loop surfaces on entry (control + schedule + approvals).
+      loadLoopCtl(); renderLoopsSchedule(); loadAppr();
     } else {
       // Lazy-init plan on first switch
       if (!S.model) { setProject(S.projectId); loadProjects(); } else { renderAll(); }
@@ -751,11 +1016,23 @@ const COCKPIT_SCRIPT = String.raw`
   }
 
   // ========== data layer ==========
+  // sid → context-gauge reading, for the board-chip + rail bars (same data the Live gauge uses).
+  function buildCtxMap(entries) {
+    var m = {};
+    (entries || []).forEach(function (e) {
+      if (!e || !e.sid) return;
+      var tokens = e.contextTokens != null ? e.contextTokens : (e.context_tokens != null ? e.context_tokens : null);
+      var ts = e.contextTs != null ? e.contextTs : (e.context_ts != null ? e.context_ts : null);
+      m[e.sid] = { tokens: tokens, ts: ts, online: !!e.online, stale: !!e.stale };
+    });
+    return m;
+  }
   function loadData(cb) {
     if (S.demo) {
       var d = buildDemoData(Date.now());
       S.leaseOffset = 0;
       S.model = buildCockpitModel(d.board, d.presence);
+      S.ctxBySid = buildCtxMap(d.presence);
       S.feed = mergeFeed([], d.events.map(toRawEvent), { limit: FEED_LIMIT });
       if (cb) cb();
       return;
@@ -771,6 +1048,7 @@ const COCKPIT_SCRIPT = String.raw`
       if (board && typeof board.now === "number") S.leaseOffset = serverClockOffset(board.now, Date.now());
       var presence = (bd && Array.isArray(bd.board) ? bd.board : []).filter(function (b) { return b.sid; }).map(function (b) { return { sid: b.sid, name: b.name, online: !!b.online, lastSeenAt: typeof b.lastSeenAt === "number" ? b.lastSeenAt : null }; });
       S.model = buildCockpitModel(board || { lanes: {} }, presence);
+      S.ctxBySid = buildCtxMap(bd && Array.isArray(bd.board) ? bd.board : []);
       S.feed = mergeFeed([], (evs && evs.events ? evs.events : []).map(toRawEvent), { limit: FEED_LIMIT });
       // W4.1-a: /plan-wedged is global — keep only this project's wedged tasks + build an id→deadBlockers lookup for card badges.
       var wedged = (wd && Array.isArray(wd.tasks) ? wd.tasks : []).filter(function (w) { return w.projectId === S.projectId; });
@@ -805,8 +1083,22 @@ const COCKPIT_SCRIPT = String.raw`
       if (stallState({ lastSeenAt: stk.ownerLastSeenAt, leaseExpiresAt: stk.lease_expires_at, clientNow: snow, offset: S.leaseOffset }).stalled) S.stalledSet[stk.id] = 1;
     }
   }
+  // Roster render guard (item 3): hide an instance whose owner's presence is gone
+  // — offline AND not seen within the presence-grace window — so a signed-off /
+  // fixture board row can't surface in the Right-Now rail. Mirrors the server
+  // presence grace (AF_PRESENCE_GRACE_SECONDS=7200). A recently-crashed real agent
+  // (offline but seen < grace ago) still shows so its stalled task can be reclaimed.
+  var ROSTER_PRESENCE_GRACE_MS = 2 * 60 * 60 * 1000;
+  function instanceLive(inst) {
+    if (!inst) return false;
+    if (inst.online) return true;
+    var ls = inst.task ? inst.task.ownerLastSeenAt : null;
+    return typeof ls === "number" && ls > 0 && (clientNow() + S.leaseOffset - ls) <= ROSTER_PRESENCE_GRACE_MS;
+  }
+  function liveInstances() { return S.model.instances.filter(instanceLive); }
   function updateCounts() {
-    $("ck-n-ops").textContent = S.model.instances.length ? "(" + S.model.instances.length + ")" : "";
+    var nLive = liveInstances().length;
+    $("ck-n-ops").textContent = nLive ? "(" + nLive + ")" : "";
     var total = 0, needsCount = 0;
     S.model.lanes.forEach(function (l) {
       total += l.count;
@@ -853,12 +1145,22 @@ const COCKPIT_SCRIPT = String.raw`
       strip.appendChild(el("span", "ck-needs-sub", parts.join(" · ")));
       v.appendChild(strip);
     }
-    if (!S.model.instances.length) { v.appendChild(emptyState("No instances working right now.", "The Right Now rail shows each agent's in-flight task and lease as work is claimed.")); return; }
-    S.model.instances.forEach(function (inst) {
+    var insts = liveInstances();
+    if (!insts.length) { v.appendChild(emptyState("No instances working right now.", "The Right Now rail shows each agent's in-flight task and lease as work is claimed.")); return; }
+    insts.forEach(function (inst) {
       var card = el("div", "ck-inst");
       var head = el("div", "ck-inst-head");
       head.appendChild(el("span", "dot" + (inst.online ? " online" : "")));
-      head.appendChild(el("span", "ck-inst-name", inst.label));
+      var nameEl = el("span", "ck-inst-name", inst.label);
+      // Interactive terminal: clicking a LIVE agent's name opens a read-only
+      // terminal mirror of its tmux session. Demo rows aren't real fleet members.
+      if (!S.demo && inst.label && inst.online) {
+        nameEl.classList.add("ck-term-open");
+        nameEl.title = "Open terminal (read-only)";
+        nameEl.setAttribute("data-callsign", inst.label);
+        (function (callsign) { nameEl.onclick = function () { openTerminal(callsign); }; })(inst.label);
+      }
+      head.appendChild(nameEl);
       head.appendChild(el("span", "ck-inst-status", (STATUS_META[inst.task.status] || {}).label || inst.task.status));
       // C3: per-agent kill-exempt pin (callsign-keyed), live data only — demo callsigns aren't real fleet members
       if (!S.demo && inst.label) { var pinEl = pinChip(inst.label); pinEl.classList.add("ck-inst-pin"); head.appendChild(pinEl); }
@@ -869,6 +1171,12 @@ const COCKPIT_SCRIPT = String.raw`
       if (rst.stalled) head.appendChild(el("span", "ck-stall", "⏸ " + rst.label));
       card.appendChild(head);
       var tl = el("div", "ck-inst-task", inst.task.title); tl.style.cursor = "pointer"; tl.onclick = function () { openDrawer(inst.task.id); }; card.appendChild(tl);
+      // Per-agent context gauge: bar only, full count on hover (same gauge as the Live view).
+      if (inst.task.owner_sid && S.ctxBySid && S.ctxBySid[inst.task.owner_sid]) {
+        var ic = S.ctxBySid[inst.task.owner_sid];
+        var icBar = renderCtxBar(ic.tokens, ic.ts, clientNow() + S.leaseOffset, ic.online && !ic.stale, true);
+        if (icBar) card.appendChild(icBar);
+      }
       if (inst.task.lease_expires_at != null) card.appendChild(leaseRow(inst.task));
       card.appendChild(handoffLine(inst.task.id));
       if (inst.secondaryTasks && inst.secondaryTasks.length) {
@@ -948,6 +1256,12 @@ const COCKPIT_SCRIPT = String.raw`
     else if (ls.hasLease && (ls.urgency === "urgent" || ls.urgency === "expired")) c.classList.add("lease-urgent");
     else if (ls.hasLease && ls.urgency === "soon") c.classList.add("lease-soon");
     c.appendChild(el("div", "ck-chip-title", task.title));
+    // Per-owner context gauge (replaces a raw token count): bar only, full count on hover.
+    if (task.owner_sid && S.ctxBySid && S.ctxBySid[task.owner_sid]) {
+      var oc = S.ctxBySid[task.owner_sid];
+      var ocBar = renderCtxBar(oc.tokens, oc.ts, clientNow() + S.leaseOffset, oc.online && !oc.stale, true);
+      if (ocBar) c.appendChild(ocBar);
+    }
     var meta = el("div", "ck-chip-meta");
     if (task.ownerLabel) { var o = el("span", "ck-chip-owner"); o.appendChild(el("span", "dot" + (task.ownerOnline ? " online" : ""))); o.appendChild(el("span", null, task.ownerLabel)); meta.appendChild(o); }
     meta.appendChild(el("span", "ck-prio ck-prio-" + task.priority, "P" + task.priority));
@@ -1189,8 +1503,9 @@ const COCKPIT_SCRIPT = String.raw`
     // any view, before both early-returns) so a plan created via fleet_plan_create
     // appears in #ck-project without a page reload.
     if (evt && evt.kind === "project_create") loadProjects();
-    // Always refresh live data (board updates arrive via same SSE path)
-    if (S.mainView === "live") { scheduleLiveRefetch(); return; }
+    // On the Loop page there are no fleet cards to refetch; the loop surfaces self-poll
+    // (initLoopCtl/initAppr timers + refresh on switch), so skip the plan refetch path.
+    if (S.mainView === "loop") { return; }
     if (!evt || evt.projectId !== S.projectId) return;
     // Capture length BEFORE async refetch; renderFeed consumes it after S.feed updates
     if (S.activeView === "feed") {
@@ -1206,7 +1521,7 @@ const COCKPIT_SCRIPT = String.raw`
   function loadProjects() {
     fetch("/plan-projects").then(function (r) { return r.ok ? r.json() : { projects: [] }; }).then(function (j) {
       var sel = $("ck-project"); sel.textContent = "";
-      var demoOpt = document.createElement("option"); demoOpt.value = "__demo__"; demoOpt.textContent = "▸ DEMO — Garden of Bloom"; sel.appendChild(demoOpt);
+      var demoOpt = document.createElement("option"); demoOpt.value = "__demo__"; demoOpt.textContent = "▸ DEMO — Acme Platform"; sel.appendChild(demoOpt);
       (j.projects || []).forEach(function (p) { var o = document.createElement("option"); o.value = p.id; o.textContent = p.title + " (" + p.taskCount + ")"; sel.appendChild(o); });
       sel.value = S.projectId;
     }).catch(function () {});
@@ -1453,6 +1768,331 @@ const COCKPIT_SCRIPT = String.raw`
     S.condPollTimer = setInterval(loadConductorStatus, 5000);
   }
 
+  // ========== operator loops panel (Phase 2) ==========
+  // Mirrors the conductor card: a persistent collapsible operator section, admin-token
+  // gated, polled every 5s while the cockpit is the active mode. Reads /loop-admin-list
+  // and drives override Pause/Resume/Terminate (admin POSTs, no owner check).
+  function loopCtlMsg(text, isErr) {
+    var m = $("ck-lctl-msg"); if (!m) return;
+    m.textContent = text || "";
+    m.classList.toggle("err", !!isErr);
+  }
+  function loadLoopCtl() {
+    if (!condActive()) return; // poll only while the cockpit is the active mode
+    fetch("/loop-admin-list", { headers: adminHeaders })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !Array.isArray(j.loops)) return; // keep last-good on a transient failure
+        var now = typeof j.now === "number" ? j.now : Date.now();
+        S.loopCtl = buildLoopViews(j.loops, now);
+        renderLoopCtl();
+      })
+      .catch(function () { /* keep last-good snapshot */ });
+  }
+  function loopCtlGaugeLevel(ratio) { return ratio == null ? "ok" : ratio >= LOOP_CRIT_AT ? "crit" : ratio >= LOOP_WARN_AT ? "warn" : "ok"; }
+  function loopCtlGaugeRow(label, g, kind) {
+    // kind "cap" → green/amber/red by ratio; "info" → always accent (completeness is progress, not danger)
+    var row = el("div", "ck-lctl-gauge");
+    row.appendChild(el("span", "ck-lctl-gauge-label", label));
+    var bar = el("div", "ck-lctl-bar");
+    var fill = el("div", "ck-lctl-fill " + (kind === "info" ? "info" : loopCtlGaugeLevel(g.ratio)));
+    fill.style.width = (g.ratio == null ? 0 : Math.min(100, Math.round(g.ratio * 100))) + "%";
+    bar.appendChild(fill); row.appendChild(bar);
+    row.appendChild(el("span", "ck-lctl-gauge-val", g.label));
+    return row;
+  }
+  function renderLoopCtl() {
+    var list = $("ck-lctl-list"); if (!list) return;
+    list.textContent = "";
+    var loops = S.loopCtl || [];
+    var active = 0;
+    loops.forEach(function (l) { if (l.active) active++; });
+    var cnt = $("ck-lctl-count"); if (cnt) cnt.textContent = loops.length ? "(" + active + " active / " + loops.length + ")" : "";
+    var dot = $("ck-lctl-dot"); if (dot) dot.classList.toggle("active", active > 0);
+    if (!loops.length) { list.appendChild(el("div", "ck-lctl-empty", "No loops registered.")); return; }
+    loops.forEach(function (l) {
+      var card = el("div", "ck-lctl-card " + (l.active ? l.pressure : "terminal"));
+      var head = el("div", "ck-lctl-card-head");
+      head.appendChild(el("span", "ck-lctl-name", l.label));
+      head.appendChild(el("span", "ck-lctl-badge " + l.status, (l.status === "stopped" || l.status === "paused") && l.stop_reason ? l.stop_reason : l.status));
+      card.appendChild(head);
+      var meta = el("div", "ck-lctl-meta");
+      meta.appendChild(el("span", null, l.kind));
+      meta.appendChild(el("span", null, "· " + l.owner));
+      card.appendChild(meta);
+      var gauges = el("div", "ck-lctl-gauges");
+      if (l.iter.shown) gauges.appendChild(loopCtlGaugeRow("iterations", l.iter, "cap"));
+      if (l.tokens.shown) gauges.appendChild(loopCtlGaugeRow("tokens", l.tokens, "cap"));
+      if (l.time.shown) gauges.appendChild(loopCtlGaugeRow("time", l.time, "cap"));
+      if (l.completeness.shown) gauges.appendChild(loopCtlGaugeRow("complete", l.completeness, "info"));
+      if (gauges.childNodes.length) card.appendChild(gauges);
+      // Phase 4 completeness trajectory — folded into the card here (coord call). Reads
+      // loop.state.scores OPTIONALLY: absent on basic loops + until P4 integrates ⇒ no-op.
+      if (l.scores && l.scores.length >= 2) {
+        var SVGNS = "http://www.w3.org/2000/svg";
+        var SPK_W = 180, SPK_H = 22;
+        var spark = el("div", "ck-lctl-spark");
+        spark.appendChild(el("div", "ck-lctl-spark-label", "completeness trajectory"));
+        var svg = document.createElementNS(SVGNS, "svg");
+        svg.setAttribute("class", "ck-lctl-spark-svg");
+        svg.setAttribute("viewBox", "0 0 " + SPK_W + " " + SPK_H);
+        svg.setAttribute("preserveAspectRatio", "none");
+        var path = document.createElementNS(SVGNS, "path");
+        path.setAttribute("class", "ck-lctl-spark-line");
+        path.setAttribute("d", loopSparkPath(l.scores, SPK_W, SPK_H));
+        svg.appendChild(path);
+        spark.appendChild(svg);
+        card.appendChild(spark);
+      }
+      // Phase 4 verdict chip — recommendation drives the colour; absent on basic loops.
+      if (l.verdict) {
+        var vrow = el("div", "ck-lctl-verdict");
+        vrow.appendChild(el("span", "ck-lctl-verdict-rec " + l.verdict.recommendation, l.verdict.recommendation));
+        if (l.verdict.status) vrow.appendChild(el("span", "ck-lctl-verdict-status", l.verdict.status));
+        card.appendChild(vrow);
+      }
+      if (l.active) {
+        var actions = el("div", "ck-lctl-actions");
+        var pr = el("button", "ck-lctl-btn", l.status === "paused" ? "Resume" : "Pause");
+        pr.setAttribute("type", "button");
+        (function (id, paused) { pr.onclick = function () { loopCtlAction(paused ? "/loop-admin-resume" : "/loop-admin-pause", id, pr); }; })(l.id, l.status === "paused");
+        actions.appendChild(pr);
+        var tm = el("button", "ck-lctl-btn danger", "Terminate");
+        tm.setAttribute("type", "button");
+        (function (id) { tm.onclick = function () { loopCtlAction("/loop-admin-stop", id, tm); }; })(l.id);
+        actions.appendChild(tm);
+        card.appendChild(actions);
+      }
+      list.appendChild(card);
+    });
+  }
+  function loopCtlAction(path, id, btn) {
+    if (btn) btn.disabled = true;
+    var body = path === "/loop-admin-stop" ? { id: id, reason: "external_terminate" } : { id: id };
+    fetch(path, { method: "POST", headers: adminHeaders, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); })
+      .then(function (res) {
+        if (!res.ok || (res.body && res.body.error)) loopCtlMsg((res.body && res.body.error) || "Loop action rejected.", true);
+        else loopCtlMsg("", false);
+        loadLoopCtl(); // authoritative re-poll re-enables/relabels the buttons
+      })
+      .catch(function () { loopCtlMsg("Loop request failed.", true); if (btn) btn.disabled = false; });
+  }
+  function initLoopCtl() {
+    var head = $("ck-lctl-head"); if (head) head.addEventListener("click", function () { $("ck-lctl").classList.toggle("open"); });
+    loadLoopCtl();
+    renderLoopsSchedule(); // Phase 3 schedule now shares the loop cadence (the Live view that drove it was removed)
+    S.loopCtlTimer = setInterval(function () { loadLoopCtl(); renderLoopsSchedule(); }, 5000);
+  }
+
+  // ========== operator approvals panel (Phase 5 HITL — integration) ==========
+  // The human-in-the-loop queue: when a loop's verifier escalates, the engine PAUSES it
+  // and opens a pending approval (atomic, inside the tick txn). This admin-gated panel
+  // lists pending approvals and lets the operator approve (→ resumeLoop) or reject
+  // (→ stopLoop). Polled 5s while the cockpit is active (like ck-lctl/conductor) and
+  // refreshed instantly on the additive loop_approval SSE. Self-contained ck-appr block.
+  function apprMsg(text, isErr) {
+    var m = $("ck-appr-msg"); if (!m) return;
+    m.textContent = text || "";
+    m.classList.toggle("err", !!isErr);
+  }
+  function loadAppr() {
+    if (!condActive()) return; // poll only while the cockpit is the active mode
+    fetch("/loop-approvals?status=pending", { headers: adminHeaders })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !Array.isArray(j.approvals)) return; // keep last-good on a transient failure
+        S.appr = j.approvals;
+        renderAppr();
+      })
+      .catch(function () { /* keep last-good snapshot */ });
+  }
+  function renderAppr() {
+    var list = $("ck-appr-list"); if (!list) return;
+    list.textContent = "";
+    var items = S.appr || [];
+    var cnt = $("ck-appr-count");
+    if (cnt) { cnt.textContent = items.length ? "(" + items.length + ")" : ""; cnt.classList.toggle("pending", items.length > 0); }
+    var dot = $("ck-appr-dot"); if (dot) dot.classList.toggle("pending", items.length > 0);
+    // Pinned top-bar badge: always-visible pending count even when off the Loop page.
+    var badge = $("ck-appr-badge"), badgeN = $("ck-appr-badge-n");
+    if (badge && badgeN) { badgeN.textContent = String(items.length); badge.style.display = items.length ? "" : "none"; }
+    if (!items.length) { list.appendChild(el("div", "ck-appr-empty", "No pending approvals.")); return; }
+    var now = Date.now();
+    items.forEach(function (a) {
+      var card = el("div", "ck-appr-card");
+      var head = el("div", "ck-appr-cardhead");
+      head.appendChild(el("span", "ck-appr-name", a.loop_id || "loop"));
+      head.appendChild(el("span", "ck-appr-badge", a.status || "pending"));
+      card.appendChild(head);
+      var v = a.verdict;
+      if (v) {
+        var vrow = el("div", "ck-appr-verdict");
+        if (v.recommendation) vrow.appendChild(el("span", "ck-appr-rec", v.recommendation));
+        if (v.status) vrow.appendChild(el("span", "ck-appr-vstatus", v.status + (typeof v.completeness === "number" ? " · " + Math.round(v.completeness * 100) + "%" : "")));
+        var gaps = [];
+        if (Array.isArray(v.missing) && v.missing.length) gaps.push(v.missing.length + " missing");
+        if (Array.isArray(v.contradictions) && v.contradictions.length) gaps.push(v.contradictions.length + " contradiction" + (v.contradictions.length !== 1 ? "s" : ""));
+        if (gaps.length) vrow.appendChild(el("span", "ck-appr-gap", gaps.join(" · ")));
+        card.appendChild(vrow);
+        if (v.rationale) card.appendChild(el("div", "ck-appr-rationale", v.rationale));
+      }
+      // reason (skip if it's just the rationale we already showed)
+      if (a.reason && !(v && a.reason === v.rationale)) card.appendChild(el("div", "ck-appr-reason", a.reason));
+      if (typeof a.created_at === "number") card.appendChild(el("div", "ck-appr-meta", "escalated " + relTime(a.created_at, now)));
+      var actions = el("div", "ck-appr-actions");
+      var ok = el("button", "ck-appr-btn approve", "Approve → resume"); ok.setAttribute("type", "button");
+      (function (id) { ok.onclick = function () { apprResolve(id, "approve", ok); }; })(a.id);
+      actions.appendChild(ok);
+      var no = el("button", "ck-appr-btn reject", "Reject → terminate"); no.setAttribute("type", "button");
+      (function (id) { no.onclick = function () { apprResolve(id, "reject", no); }; })(a.id);
+      actions.appendChild(no);
+      card.appendChild(actions);
+      list.appendChild(card);
+    });
+  }
+  function apprResolve(id, decision, btn) {
+    if (btn) btn.disabled = true;
+    fetch("/loop-approval-resolve", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: id, decision: decision, by: "operator" }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); })
+      .then(function (res) {
+        if (!res.ok || (res.body && res.body.error)) apprMsg((res.body && res.body.error) || "Approval action rejected.", true);
+        else apprMsg("", false);
+        loadAppr();    // refresh the queue
+        loadLoopCtl(); // the loop's status changed (resumed / terminated)
+      })
+      .catch(function () { apprMsg("Approval request failed.", true); if (btn) btn.disabled = false; });
+  }
+  function initAppr() {
+    var head = $("ck-appr-head"); if (head) head.addEventListener("click", function () { $("ck-appr").classList.toggle("open"); });
+    // Pinned badge → jump to the Loop page, expand approvals, scroll them into view (last panel).
+    var badge = $("ck-appr-badge");
+    if (badge) badge.addEventListener("click", function () {
+      switchMainView("loop");
+      var ap = $("ck-appr"); if (ap) ap.classList.add("open");
+      var v = $("ck-view-loop"); if (v) v.scrollTop = v.scrollHeight;
+    });
+    loadAppr();
+    S.apprTimer = setInterval(loadAppr, 5000);
+  }
+
+  // ========== interactive terminal ==========
+  // Click a live agent's name → POST /terminal-ticket (admin/cockpit-token gated)
+  // → open a WS to /terminal?ticket=… → render the tmux mirror in xterm.js
+  // (vendored, no CDN). WRITABLE by default (full control): keystrokes drive the
+  // live session immediately. "Release control" drops to a read-only mirror.
+  // Closing tears down the WS + the term.
+  var TERM = { ws: null, term: null, fit: null, callsign: null, readonly: false, status: "", onData: null, resizeHandler: null };
+
+  // No terminal-local chrome anymore — the active agent name + connection status
+  // live on the MAIN app header (#term-active-label). termSetBadge just tracks
+  // write/read state (gates input forwarding); termSetStatus updates the header tail.
+  function setTermHeaderLabel() {
+    var el = document.getElementById("term-active-label");
+    if (!el) return;
+    if (!TERM.callsign) { el.textContent = ""; el.classList.remove("active"); return; }
+    el.textContent = "▶ " + TERM.callsign + " terminal" + (TERM.status ? " · " + TERM.status : "");
+    el.classList.add("active");
+  }
+  function termSetBadge(readonly) { TERM.readonly = readonly; }
+
+  function termSetStatus(msg) { TERM.status = msg || ""; setTermHeaderLabel(); }
+
+  function openTerminal(callsign) {
+    if (typeof Terminal === "undefined") { termSetStatus("xterm.js not loaded"); return; }
+    // Tear down any existing session first (one panel at a time).
+    closeTerminal();
+    TERM.callsign = callsign;
+    termSetBadge(false); // writable by default (full control) — terminal stays write
+    termSetStatus("connecting…"); // surfaces "▶ <callsign> terminal · connecting…" on the main header
+    // The terminal now takes over the radio .message-area, so guarantee we're in
+    // Radio mode before showing it — the cockpit Right-Now rail entry point can
+    // fire while cockpit-mode hides the chat column. Mirror the header
+    // mode-switch's own class toggles (it owns no exported setter).
+    document.body.classList.remove("cockpit-mode");
+    var rb = document.getElementById("mode-radio"), cb = document.getElementById("mode-cockpit");
+    if (rb) rb.classList.add("active");
+    if (cb) cb.classList.remove("active");
+    $("ck-term-overlay").classList.add("open");
+    $("ck-term-overlay").setAttribute("aria-hidden", "false");
+
+    // Build the xterm instance.
+    var term = new Terminal({ convertEol: false, cursorBlink: true, fontFamily: "IBM Plex Mono, monospace", fontSize: 13, theme: { background: "#FEFCF6", foreground: "#423F37", cursor: "#C9501A", cursorAccent: "#FEFCF6", selectionBackground: "#E2D6BF", selectionForeground: "#1A1C18", black: "#3A3A33", red: "#B23A1A", green: "#58721D", yellow: "#8D6110", blue: "#3D6577", magenta: "#8A4E63", cyan: "#2C7568", white: "#B0561B", brightBlack: "#EDE6D5", brightRed: "#C34E19", brightGreen: "#647C27", brightYellow: "#926D24", brightBlue: "#4B7A8D", brightMagenta: "#9C6277", brightCyan: "#338072", brightWhite: "#B23A1A" } });
+    TERM.term = term;
+    try {
+      var FitCtor = (window.FitAddon && window.FitAddon.FitAddon) ? window.FitAddon.FitAddon : null;
+      if (FitCtor) { TERM.fit = new FitCtor(); term.loadAddon(TERM.fit); }
+    } catch (e) { TERM.fit = null; }
+    term.open($("ck-term-body"));
+    try { if (TERM.fit) TERM.fit.fit(); } catch (e) {}
+
+    // Mint a single-use ticket (browser-gated by the cockpit token), then open WS.
+    fetch("/terminal-ticket", { method: "POST", headers: adminHeaders, body: JSON.stringify({ callsign: callsign }) })
+      .then(function (r) { return r.ok ? r.json() : r.json().then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); }); })
+      .then(function (j) { termConnect(j.ticket); })
+      .catch(function (e) { termSetStatus("ticket failed: " + e.message); });
+  }
+
+  function termConnect(ticket) {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var ws = new WebSocket(proto + "//" + location.host + "/terminal?ticket=" + encodeURIComponent(ticket));
+    ws.binaryType = "arraybuffer";
+    TERM.ws = ws;
+    ws.onopen = function () {
+      termSetStatus("connected");
+      // Send our size so the mirror matches the panel.
+      termSendResize();
+    };
+    ws.onmessage = function (ev) {
+      var data = ev.data;
+      if (typeof data === "string") {
+        // Our control frames are JSON beginning with {"__ctl".
+        if (data.charAt(0) === "{" && data.indexOf('"__ctl"') !== -1) {
+          var msg = null; try { msg = JSON.parse(data); } catch (e) { msg = null; }
+          if (msg && msg.__ctl) { if (msg.type === "mode") termSetBadge(!!msg.readonly); return; }
+        }
+        if (TERM.term) TERM.term.write(data);
+      } else {
+        // Binary pane output.
+        if (TERM.term) TERM.term.write(new Uint8Array(data));
+      }
+    };
+    ws.onclose = function () { termSetStatus("disconnected"); };
+    ws.onerror = function () { termSetStatus("connection error"); };
+
+    // Forward keystrokes — the SERVER drops them in read-only mode, but we also
+    // guard here so read-only never even transmits input.
+    TERM.onData = TERM.term.onData(function (d) {
+      if (TERM.readonly) return;
+      if (TERM.ws && TERM.ws.readyState === 1) TERM.ws.send(d);
+    });
+
+    // Refit + report size on window resize.
+    TERM.resizeHandler = function () { try { if (TERM.fit) TERM.fit.fit(); } catch (e) {} termSendResize(); };
+    window.addEventListener("resize", TERM.resizeHandler);
+  }
+
+  function termSendResize() {
+    if (!TERM.ws || TERM.ws.readyState !== 1 || !TERM.term) return;
+    try { TERM.ws.send(JSON.stringify({ type: "resize", cols: TERM.term.cols, rows: TERM.term.rows })); } catch (e) {}
+  }
+
+  function closeTerminal() {
+    if (TERM.resizeHandler) { window.removeEventListener("resize", TERM.resizeHandler); TERM.resizeHandler = null; }
+    if (TERM.onData && TERM.onData.dispose) { try { TERM.onData.dispose(); } catch (e) {} TERM.onData = null; }
+    if (TERM.ws) { try { TERM.ws.close(); } catch (e) {} TERM.ws = null; }
+    if (TERM.term) { try { TERM.term.dispose(); } catch (e) {} TERM.term = null; }
+    TERM.fit = null; TERM.callsign = null; TERM.readonly = false; TERM.status = "";
+    setTermHeaderLabel(); // clear the active-terminal label off the main header
+    var ov = $("ck-term-overlay"); if (ov) { ov.classList.remove("open"); ov.setAttribute("aria-hidden", "true"); }
+  }
+
+  function initTerminal() {
+    // No in-panel buttons anymore — exit/restore is channel-click
+    // (selectChannel→closeTerminal, wired in dashboard.ts) or Esc. Keep only Esc.
+    document.addEventListener("keydown", function (e) { var ov = $("ck-term-overlay"); if (e.key === "Escape" && ov && ov.classList.contains("open")) closeTerminal(); });
+  }
+
   // ========== init ==========
   function init() {
     if (!document.getElementById("cockpit")) return;
@@ -1469,14 +2109,23 @@ const COCKPIT_SCRIPT = String.raw`
     window.addEventListener("resize", function () { if (S.activeView === "dag") renderDagIfVisible(); });
     setInterval(tickLeases, 1000);
     initConductor(); // WS-C: operator control panel wiring + status poll
-    // E1: Default to Live view; Plan loads lazily
-    document.body.classList.add("ck-main-live");
-    loadLiveData(renderLive);
+    initLoopCtl(); // Phase 2: operator loops panel wiring + status poll
+    initAppr(); // Phase 5 (integration): HITL approvals panel wiring + status poll
+    initTerminal(); // Interactive terminal panel wiring (clickable rail names)
+    // E1: Default to Loop view; Plan loads lazily. Loop surfaces are driven by
+    // initLoopCtl/initAppr above (control + schedule + approvals self-poll).
+    document.body.classList.add("ck-main-loop");
     window.__cockpit = {
+      openTerminal: openTerminal,
+      closeTerminal: closeTerminal, // radio channel-select calls this to restore chat
+
       onPlanUpdate: onPlanUpdate,
-      onReconnect: function() { if (S.mainView === "live") { loadLiveData(renderLive); } else { loadData(renderAll); } setConn(true); loadConductorStatus(); },
-      show: function() { if (S.mainView === "live") loadLiveData(renderLive); else loadData(renderAll); loadConductorStatus(); },
-      refresh: function() { if (S.mainView === "live") loadLiveData(renderLive); else loadData(renderAll); loadConductorStatus(); }
+      onReconnect: function() { if (S.mainView !== "loop") loadData(renderAll); setConn(true); loadConductorStatus(); loadLoopCtl(); renderLoopsSchedule(); loadAppr(); },
+      show: function() { if (S.mainView !== "loop") loadData(renderAll); loadConductorStatus(); loadLoopCtl(); renderLoopsSchedule(); loadAppr(); },
+      refresh: function() { if (S.mainView !== "loop") loadData(renderAll); loadConductorStatus(); loadLoopCtl(); renderLoopsSchedule(); loadAppr(); },
+      // Phase 5 (integration): instant refresh on the loop_approval SSE (escalate opened a
+      // queue item, or an approval was resolved). Also refresh ck-lctl since the loop paused/resumed.
+      onLoopApproval: function() { loadAppr(); loadLoopCtl(); }
     };
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();

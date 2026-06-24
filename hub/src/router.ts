@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { getUserRole, getUsersByRole, isUserRegistered } from "./auth.js";
-import { getChannelMembers, isChannelMember } from "./channels.js";
+import { getUserRole, getUsersByRole, isPersistentUser, isUserRegistered } from "./auth.js";
+import { getChannelMembers, isChannelMember, joinChannel } from "./channels.js";
 import { dbCreatePendingAck, dbNextChannelSeq, dbSaveMessage } from "./db.js";
 import { deliverMessage } from "./polling.js";
 import type { Message, MessageImage } from "./types.js";
@@ -43,8 +43,15 @@ function resolveMentions(content: string, members: string[]): string[] {
 // SERVER-VERIFIED principal flag (set by the verified send path — never a
 // client-settable field) AND a reserved operator callsign. The referee is also a
 // principal but is intentionally EXCLUDED here so @all stays quiet for it; the
-// referee keeps normal @-mention semantics.
-const OPERATOR_PING_CALLSIGNS = new Set(["operator"]);
+// referee keeps normal @-mention semantics. The recognized callsigns are the
+// literal "operator" plus the configured operator name (AF_OPERATOR_NAME ??
+// WT_OPERATOR_NAME ?? "Operator"), all matched case-insensitively.
+const OPERATOR_PING_CALLSIGNS = new Set(
+  [
+    "operator",
+    (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator",
+  ].map((n) => n.toLowerCase()),
+);
 function isOperatorPingAll(from: string, principal?: boolean): boolean {
   return principal === true && OPERATOR_PING_CALLSIGNS.has(from.trim().toLowerCase());
 }
@@ -75,6 +82,14 @@ export function drainQueue(name: string): Message[] {
   const messages = [...queue];
   queue.length = 0;
   return messages;
+}
+
+// Non-destructive read of a member's queued messages — used by the operator-inbox
+// admin surface so the cockpit can show what is waiting for the operator without consuming
+// it (drain still consumes via drainQueue). Returns a copy; never the live array.
+export function peekQueue(name: string): Message[] {
+  const queue = messageQueues.get(name);
+  return queue ? [...queue] : [];
 }
 
 export function routeMessage(
@@ -138,7 +153,15 @@ export function routeMessage(
   }
 
   if (!isChannelMember(channel, targetName)) {
-    throw new Error(`User "${targetName}" is not a member of ${channel}`);
+    // The persistent operator presence is reachable in EVERY channel, not
+    // just #all — so `fleet_send to:@operator` from any channel resolves instead of
+    // throwing "not a member". Lazily join the operator to the channel here; a
+    // normal member still gets the not-a-member error.
+    if (isPersistentUser(targetName)) {
+      joinChannel(channel, targetName);
+    } else {
+      throw new Error(`User "${targetName}" is not a member of ${channel}`);
+    }
   }
 
   const message: Message = {
@@ -164,8 +187,12 @@ export function routeMessage(
     dbCreatePendingAck(message.id, senderSid, channel);
   }
 
-  // Deliver to all channel members except sender
-  for (const user of members) {
+  // Deliver to all channel members except sender. `members` was snapshotted before
+  // a possible lazy operator auto-join above, so add the named target explicitly to
+  // be sure it receives its own message even when just-joined (Set dedupes).
+  const recipients = new Set(members);
+  recipients.add(targetName);
+  for (const user of recipients) {
     if (user !== from) {
       enqueueAndDeliver(user, message);
     }

@@ -1,0 +1,13 @@
+{
+  "_comment": "GENERATED at runtime by fleet.mjs (writeBuilderSettings) on every `fleet up`. The Edit/Write allowlist paths are templated from the dynamic repo root + ~/.claude; this checked-in copy is a placeholder and is overwritten before any spawn.",
+  "permissions": {
+    "allow": [
+      "mcp__agent-fleet",
+      "mcp__plugin_agent-fleet_agent-fleet",
+      "Edit(${HOME}/.claude/hooks/**)",
+      "Write(${HOME}/.claude/hooks/**)",
+      "Edit(${AGENT_FLEET_REPO_ROOT}/**)",
+      "Write(${AGENT_FLEET_REPO_ROOT}/**)"
+    ]
+  }
+}

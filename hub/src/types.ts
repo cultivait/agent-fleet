@@ -50,12 +50,23 @@ export interface User {
   // routeMessage's principal stamp on this user's /send messages. Never derived
   // from a client-supplied body — the server is the sole source of this flag.
   isPrincipal: boolean;
+  // Operator presence: true only for the persistent operator identity,
+  // bootstrapped server-side at hub start. A persistent user is a VIRTUAL presence
+  // (no live Claude session backing it), so it is EXEMPT from the ghost-reaper /
+  // kick-all (which exist to clear dead sessions). Distinct from isPrincipal: the
+  // REFEREE is a principal but a REAL session, so it is NOT persistent and IS
+  // reaped when it dies. Never read from a client body.
+  persistent: boolean;
 }
 
 export interface RegisterRequest {
   name: string;
   oldToken?: string;
   role?: UserRole;
+  // Claude session id (CLAUDE_CODE_SESSION_ID) when the joining client knows it.
+  // Lets /register stamp the registry row's callsign at join time so GET /whoami is
+  // authoritative from the first beat of a join (not only after the first board-update).
+  sid?: string;
 }
 
 export interface RegisterResponse {

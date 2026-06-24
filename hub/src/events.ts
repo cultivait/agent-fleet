@@ -52,6 +52,16 @@ export type HubEvent =
       node: string | null;
       status: string;
       timestamp: number;
+    }
+  // Loop Phase 5 (HITL): a loop's approval-queue item changed (opened on escalate, or
+  // resolved by the operator). Carries enough to route a refresh; the cockpit refetches
+  // /loop-approvals for the full queue.
+  | {
+      type: "loop_approval";
+      loop_id: string;
+      approval_id: string;
+      status: "pending" | "approved" | "rejected";
+      timestamp: number;
     };
 
 const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
