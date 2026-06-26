@@ -35,6 +35,15 @@ export type HubEvent =
       timestamp: number;
     }
   | { type: "board_delete"; name: string; timestamp: number }
+  // Board auto-digest: a new agent_log entry was appended. Browser-only stream —
+  // it wakes NO agent (deliverMessage is never called for SSE). The dashboard
+  // folds entry into the emitting card's latest-log headline + last-5 tail.
+  | {
+      type: "agent_log";
+      name: string;
+      entry: { id: number; ts: number; kind: string; note: string };
+      timestamp: number;
+    }
   | { type: "agent_config_create"; id: string; name: string; timestamp: number }
   | { type: "agent_config_update"; id: string; name: string; timestamp: number }
   | { type: "agent_config_delete"; id: string; timestamp: number }

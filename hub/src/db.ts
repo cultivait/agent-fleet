@@ -38,6 +38,18 @@ export interface BoardRow {
   updated_at: number;
 }
 
+// Board auto-digest: an append-only per-agent logbook. Agents emit one cheap
+// line (finding/decision/blocker/done) via fleet_log instead of posting prose to
+// chat — it wakes no one and is read by the dashboard, not pushed into contexts.
+// Mirrors the task_event append-only pattern (plan/store.ts).
+export interface AgentLogRow {
+  id: number;
+  name: string; // emitting agent's callsign
+  ts: number;
+  kind: string; // finding | decision | blocker | done
+  note: string; // one-line entry
+}
+
 let db: Database.Database;
 
 export function initDB(): void {
@@ -266,6 +278,21 @@ export function initDB(): void {
   db.exec(
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_spawn ON registry (spawn_id) WHERE spawn_id IS NOT NULL",
   );
+
+  // === Board auto-digest: agent_log ===
+  // Append-only per-agent logbook. One row per fleet_log emit — the "detailed
+  // book" that keeps detail off chat (no @-mention, no wake; dashboard reads it).
+  // Mirrors the task_event append-only pattern; no FK so it survives board churn.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      note TEXT NOT NULL
+    )
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_agent_log_name_id ON agent_log (name, id)");
 
   // Local patch: meta-harness plan core (Option-C module owns its own schema)
   initPlanSchema(db);
@@ -497,6 +524,51 @@ export function dbListBoard(): BoardRow[] {
 export function dbDeleteBoardEntry(name: string): boolean {
   const result = db.prepare("DELETE FROM board WHERE name = ?").run(name);
   return result.changes > 0;
+}
+
+// Board auto-digest: agent_log append + read. Insert is append-only (no upsert);
+// list returns newest-first, capped, for a single agent.
+export function dbInsertLog(name: string, kind: string, note: string): AgentLogRow {
+  const ts = Date.now();
+  const info = db
+    .prepare("INSERT INTO agent_log (name, ts, kind, note) VALUES (?, ?, ?, ?)")
+    .run(name, ts, kind, note);
+  return { id: Number(info.lastInsertRowid), name, ts, kind, note };
+}
+
+export function dbListLog(name: string, limit = 5): AgentLogRow[] {
+  return db
+    .prepare("SELECT * FROM agent_log WHERE name = ? ORDER BY id DESC LIMIT ?")
+    .all(name, limit) as AgentLogRow[];
+}
+
+// Board auto-digest: latest log line for EVERY agent in one query (newest per
+// name). Used to fold a `recentLog` headline into the GET /board payload without
+// N round-trips. Correlated subquery picks each name's max id.
+export function dbListLatestLogPerAgent(): AgentLogRow[] {
+  return db
+    .prepare(
+      `SELECT a.* FROM agent_log a
+       WHERE a.id = (SELECT MAX(b.id) FROM agent_log b WHERE b.name = a.name)
+       ORDER BY a.ts DESC`,
+    )
+    .all() as AgentLogRow[];
+}
+
+// board-digest v2 (read-half): recent log entries from OTHER agents since a
+// watermark id, newest-first. Powers GET /agent-log-digest, which the rewake
+// Stop-hook pulls to surface teammate findings on a wake that's ALREADY firing
+// (ride-only / delta / bounded). exclude = the caller's own callsign (skip self).
+export function dbListLogSince(sinceId: number, excludeName: string | null, limit = 5): AgentLogRow[] {
+  const lim = Math.min(Math.max(Math.floor(limit) || 5, 1), 20);
+  if (excludeName) {
+    return db
+      .prepare("SELECT * FROM agent_log WHERE id > ? AND name != ? ORDER BY id DESC LIMIT ?")
+      .all(sinceId, excludeName, lim) as AgentLogRow[];
+  }
+  return db
+    .prepare("SELECT * FROM agent_log WHERE id > ? ORDER BY id DESC LIMIT ?")
+    .all(sinceId, lim) as AgentLogRow[];
 }
 
 // Agent config CRUD

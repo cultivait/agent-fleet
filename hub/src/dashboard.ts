@@ -1228,6 +1228,78 @@ export function getDashboardHTML(
     align-items: baseline;
   }
   .board-completed .done-check { color: var(--accent-text); }
+  /* Board auto-digest: the per-agent logbook headline + expandable last-5.
+     This is the "detailed book" — where detail lives so it stays out of chat. */
+  .board-log {
+    border-top: 1px dashed var(--border);
+    padding-top: 6px;
+    margin-top: 2px;
+  }
+  .board-log-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    cursor: pointer;
+    min-width: 0;
+    border-radius: 4px;
+    margin: -2px -4px;
+    padding: 2px 4px;
+    transition: background 0.12s ease;
+  }
+  .board-log-head:hover { background: var(--bg-hover); }
+  .board-log-kind {
+    flex-shrink: 0;
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+  }
+  .board-log-kind.decision { background: var(--green-soft); color: var(--accent-text); }
+  .board-log-kind.blocker { background: var(--red-soft); color: var(--red); }
+  .board-log-kind.done { background: var(--yellow-soft); color: var(--yellow-text); }
+  .board-log-note {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .board-log-toggle {
+    flex-shrink: 0;
+    font-size: 9px;
+    color: var(--text-tertiary);
+  }
+  .board-log-tail {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 6px 0 2px;
+    padding-left: 2px;
+  }
+  .board-log-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+  .board-log-line .board-log-note {
+    white-space: normal;
+    word-break: break-word;
+    color: var(--text-primary);
+  }
+  .board-log-age {
+    flex-shrink: 0;
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-tertiary);
+  }
   .board-age {
     font-family: var(--mono);
     font-size: 10px;
@@ -2194,7 +2266,7 @@ export function getDashboardHTML(
 
     // Task board
     const boardCardsEl = document.getElementById("board-cards");
-    const boardEntries = new Map(); // name -> { name, node, status, mission, activity, todos, subagents, sid, updatedAt, online, lastSeenAt, stale, contextTokens, contextTs }
+    const boardEntries = new Map(); // name -> { name, node, status, mission, activity, todos, subagents, sid, updatedAt, online, lastSeenAt, stale, contextTokens, contextTs, recentLog, logTail?, logOpen? }
 
     // 3B: plan tasks each session currently holds, keyed by owner_sid (= board sid).
     // Joined onto cards in renderBoard; refreshed on plan_update + SSE reconnect.
@@ -2392,6 +2464,32 @@ export function getDashboardHTML(
           }
           planHtml += '</div>';
         }
+        // Board auto-digest: the agent's latest logbook line as a headline,
+        // click-to-expand to its last 5. This is the "detailed book" — detail
+        // lives here (read), not in chat (which wakes). Empty until first emit.
+        let logHtml = "";
+        if (entry.recentLog && entry.recentLog.note) {
+          const lg = entry.recentLog;
+          const kindCls = (lg.kind === "decision" || lg.kind === "blocker" || lg.kind === "done") ? lg.kind : "finding";
+          const open = !!entry.logOpen;
+          let tailHtml = "";
+          if (open && Array.isArray(entry.logTail) && entry.logTail.length > 0) {
+            tailHtml = '<ul class="board-log-tail">';
+            for (const e of entry.logTail) {
+              const kc = (e.kind === "decision" || e.kind === "blocker" || e.kind === "done") ? e.kind : "finding";
+              tailHtml += '<li class="board-log-line"><span class="board-log-kind ' + kc + '">' + escapeHtml(e.kind) + '</span><span class="board-log-note">' + escapeHtml(e.note) + '</span><span class="board-log-age">' + formatAge(e.ts) + '</span></li>';
+            }
+            tailHtml += '</ul>';
+          }
+          logHtml = '<div class="board-log' + (open ? ' open' : '') + '">'
+            + '<div class="board-log-head" data-name="' + escapeHtml(entry.name) + '" title="Show recent log">'
+            + '<span class="board-log-kind ' + kindCls + '">' + escapeHtml(lg.kind) + '</span>'
+            + '<span class="board-log-note">' + escapeHtml(lg.note) + '</span>'
+            + '<span class="board-log-toggle">' + (open ? '&#9652;' : '&#9662;') + '</span>'
+            + '</div>'
+            + tailHtml
+            + '</div>';
+        }
         html += '<div class="board-card">'
           + '<div class="board-card-head">'
           + '<span class="' + dotCls + '"></span>'
@@ -2406,6 +2504,7 @@ export function getDashboardHTML(
           + (entry.activity ? '<div class="board-activity">' + escapeHtml(entry.activity) + '</div>' : '')
           + planHtml
           + todosHtml
+          + logHtml
           + '<div class="board-age">updated ' + formatAge(entry.updatedAt || 0) + '</div>'
           + '</div>';
       }
@@ -2413,6 +2512,28 @@ export function getDashboardHTML(
       for (const btn of boardCardsEl.querySelectorAll(".board-remove-btn")) {
         btn.onclick = () => boardDelete(btn.dataset.name);
       }
+      // Board auto-digest: click a log headline to expand/collapse its last-5.
+      // The tail is fetched lazily on first open (then kept live by agent_log SSE).
+      for (const head of boardCardsEl.querySelectorAll(".board-log-head")) {
+        head.onclick = () => toggleBoardLog(head.dataset.name);
+      }
+    }
+
+    // Board auto-digest: toggle a card's expandable log tail. First open fetches
+    // /agent-log-tail (public read, no wake); thereafter agent_log SSE keeps it
+    // current. Re-renders via renderBoard so the open state + arrow stay in sync.
+    function toggleBoardLog(name) {
+      const entry = boardEntries.get(name);
+      if (!entry) return;
+      const willOpen = !entry.logOpen;
+      entry.logOpen = willOpen;
+      if (willOpen && !Array.isArray(entry.logTail)) {
+        fetch("/agent-log-tail?name=" + encodeURIComponent(name) + "&limit=5")
+          .then(r => r.json())
+          .then(data => { entry.logTail = (data && data.log) || []; renderBoard(); })
+          .catch(() => { entry.logTail = []; renderBoard(); });
+      }
+      renderBoard();
     }
 
     function boardDelete(name) {
@@ -2459,6 +2580,9 @@ export function getDashboardHTML(
             stale: !!b.stale,
             contextTokens: b.contextTokens != null ? b.contextTokens : null,
             contextTs: b.contextTs != null ? b.contextTs : null,
+            // Board auto-digest: freshest logbook line ({ts,kind,note}) or null.
+            // The expandable last-5 tail is fetched lazily on card-click.
+            recentLog: b.recentLog || null,
           });
         }
         for (const name of [...boardEntries.keys()]) if (!fresh.has(name)) boardEntries.delete(name);
@@ -2668,8 +2792,22 @@ export function getDashboardHTML(
           stale: prev ? prev.stale : false,
           contextTokens: prev ? prev.contextTokens : null,
           contextTs: prev ? prev.contextTs : null,
+          // board_update carries no log; preserve the last known headline.
+          recentLog: prev ? prev.recentLog : null,
         });
         renderBoard();
+      } else if (ev.type === "agent_log") {
+        // Board auto-digest: fold the new entry into the emitting card. Update
+        // the latest-log headline live; if that card's tail is currently
+        // expanded, prepend to it (cap 5) so an open log grows in real time.
+        const prev = boardEntries.get(ev.name);
+        if (prev) {
+          prev.recentLog = ev.entry;
+          if (Array.isArray(prev.logTail)) {
+            prev.logTail = [ev.entry, ...prev.logTail].slice(0, 5);
+          }
+          renderBoard();
+        }
       } else if (ev.type === "board_delete") {
         if (boardEntries.delete(ev.name)) renderBoard();
       } else if (ev.type === "typing") {

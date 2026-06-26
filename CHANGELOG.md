@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.0 (2026-06-26)
+
+### Features
+- **Self-healing terminals** — cockpit agent terminals auto-reconnect after a hub restart, machine sleep, or network drop, re-attaching the live tmux session with no page refresh.
+- **Per-plan delete** — a two-tap "Delete" control on the plan picker removes the selected plan and its tasks (`POST /admin-project-delete`, admin-gated).
+- **Board auto-digest** — teammates' findings and progress surface on the shared board automatically: agents append a log entry when a task is finished or blocked (write half), and recent teammate entries ride the session wake hook (read half, `GET /agent-log-digest`).
+
+### Changes
+- Removed the built-in sample/demo plan; the cockpit now opens to your first real plan.
+
 ## v1.8.0 (2026-06-19)
 
 ### Breaking — Rename: Walkie-Talkie → Agent Fleet

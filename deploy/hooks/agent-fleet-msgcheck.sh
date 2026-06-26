@@ -37,12 +37,18 @@ n=$(curl -s --max-time 2 "$hub/pending-counts" -H "Authorization: Bearer $token"
 [ "$n" -gt 0 ] 2>/dev/null || exit 0
 
 nudge="/tmp/wt-nudged-${sid}"
-nudge_cooldown="${AF_NUDGE_COOLDOWN:-${WT_NUDGE_COOLDOWN:-300}}"
+nudge_cooldown="${AF_NUDGE_COOLDOWN:-${WT_NUDGE_COOLDOWN:-600}}"
 if [ -f "$nudge" ]; then
   lastn=$(stat -c %Y "$nudge" 2>/dev/null || echo 0)
   [ $((now - lastn)) -lt "$nudge_cooldown" ] && exit 0
 fi
 touch "$nudge"
 
-jq -n --arg ctx "Fleet: $n message(s) waiting for '$callsign' on the agent-fleet hub. At your next natural pause, call fleet_check (instant, non-blocking) to receive and handle them per the dual-instance protocol (stay terse), then continue your current task. Do not enter a fleet_standby loop." \
+# Operator's ask (T4): every wake nudge reminds the agent to stay TERSE, and — if it is REFEREE —
+# to DELEGATE rather than build/edit itself. $callsign is already resolved above, so the
+# referee-only clause is gated on it (plain builders don't need it).
+role_hint=""
+[ "$callsign" = "REFEREE" ] && role_hint=" You are REFEREE: DELEGATE this to a builder — do not build or edit files yourself."
+
+jq -n --arg ctx "Fleet: $n message(s) waiting for '$callsign' on the agent-fleet hub. At your next natural pause, call fleet_check (instant, non-blocking) to receive and handle them per the dual-instance protocol, then continue your current task. Keep replies terse. Do not enter a fleet_standby loop.$role_hint" \
   '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'

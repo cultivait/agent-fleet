@@ -62,6 +62,10 @@ import {
   dbListBoard,
   dbListChannels,
   dbListRegistry,
+  dbInsertLog,
+  dbListLog,
+  dbListLatestLogPerAgent,
+  dbListLogSince,
   dbPutBoardEntry,
   dbRegistryUpsert,
   dbReleaseResourceLock,
@@ -98,6 +102,7 @@ import {
   addHandoff,
   createProject,
   createTask,
+  deleteProject,
   getHandoffs,
   getLatestHandoff,
   getProject,
@@ -1216,6 +1221,13 @@ const handleBoard: RouteHandler = async (_req, res) => {
       if (!prev || (e.context_ts ?? 0) >= (prev.context_ts ?? 0)) ctxByCallsign.set(e.callsign, ctx);
     }
   }
+  // Board auto-digest: one latest log headline per agent, joined by callsign.
+  // The full last-5 is fetched lazily by the dashboard on card-expand; the board
+  // payload carries only the single freshest line to keep it glanceable + small.
+  const logByName = new Map<string, { ts: number; kind: string; note: string }>();
+  for (const l of dbListLatestLogPerAgent()) {
+    logByName.set(l.name, { ts: l.ts, kind: l.kind, note: l.note });
+  }
   const board = dbListBoard().map((r) => {
     const online = isUserRegistered(r.name) && isOnline(r.name);
     const lastSeenAt = getLastSeen(r.name);
@@ -1246,10 +1258,73 @@ const handleBoard: RouteHandler = async (_req, res) => {
       // LIVENESS stamp — the card greys the reading when it stops advancing.
       contextTokens: ctxRow?.context_tokens ?? null,
       contextTs: ctxRow?.context_ts ?? null,
+      // Board auto-digest: the single freshest logbook line for this agent
+      // (null until it emits its first fleet_log). The card renders it as the
+      // "latest log" headline; expand fetches the last 5 via /agent-log?name=.
+      recentLog: logByName.get(r.name) ?? null,
     };
   });
   // Server clock mirrors /plan-board so cockpit computes one shared clock offset.
   sendJson(res, 200, { board, now });
+};
+
+// === Board auto-digest: agent_log endpoints ===
+// The structural fix for comms-verbosity decay: detail (findings/decisions/
+// progress) belongs in a logbook that's READ, not a chat message that WAKES.
+// A fleet_log emit posts here — it never @-mentions, so it wakes no one; the
+// dashboard reads it. Mirrors /board-update's join-token gate + heartbeat.
+const AGENT_LOG_KINDS = new Set(["finding", "decision", "blocker", "done"]);
+const AGENT_LOG_TAIL_MAX = 20;
+
+const handleAgentLog: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as {
+    name?: string;
+    kind?: string;
+    note?: string;
+  };
+  if (!body.name || typeof body.name !== "string" || !body.name.trim()) {
+    return sendError(res, 400, "Missing or invalid 'name' field");
+  }
+  if (!body.note || typeof body.note !== "string" || !body.note.trim()) {
+    return sendError(res, 400, "Missing or invalid 'note' field");
+  }
+  const name = body.name.trim().slice(0, BOARD_TEXT_MAX);
+  const kind = typeof body.kind === "string" && AGENT_LOG_KINDS.has(body.kind) ? body.kind : "finding";
+  const note = body.note.trim().slice(0, BOARD_TEXT_MAX);
+  // Emitting a log entry proves the agent is alive — same liveness beat as a
+  // board-update, so a working (non-polling) agent isn't ghost-reaped.
+  touchLastSeen(name);
+  const entry = dbInsertLog(name, kind, note);
+  // SSE so the dashboard updates the card's latest-log headline live, with no
+  // wake to any agent (browser-only stream; deliverMessage is never called).
+  broadcast({
+    type: "agent_log",
+    name: entry.name,
+    entry: { id: entry.id, ts: entry.ts, kind: entry.kind, note: entry.note },
+    timestamp: entry.ts,
+  });
+  console.log(`[log] ${name} [${kind}]: ${note}`);
+  sendJson(res, 200, { ok: true, entry });
+};
+
+const handleAgentLogTail: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const name = url.searchParams.get("name");
+  if (!name || !name.trim()) return sendError(res, 400, "Missing 'name' query param");
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "5", 10) || 5, 1), AGENT_LOG_TAIL_MAX);
+  sendJson(res, 200, { name, log: dbListLog(name.trim().slice(0, BOARD_TEXT_MAX), limit) });
+};
+
+// board-digest v2 read-half: recent OTHER-agent log entries since a watermark id,
+// newest-first, bounded. Public read (like /agent-log-tail). The rewake Stop-hook
+// pulls this on a wake that's ALREADY firing to surface teammate findings;
+// entries[0].id is the caller's next watermark (no separate maxId needed).
+const handleAgentLogDigest: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const since = parseInt(url.searchParams.get("since") ?? "0", 10) || 0;
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "5", 10) || 5, 1), AGENT_LOG_TAIL_MAX);
+  const exclude = (url.searchParams.get("exclude") ?? "").trim();
+  sendJson(res, 200, { entries: dbListLogSince(since, exclude || null, limit) });
 };
 
 // Local patch: task board lifecycle — when the hub unregisters an agent
@@ -1645,6 +1720,23 @@ const handleProjectCreate: RouteHandler = async (req, res) => {
   const project = createProject(body.title.trim(), body.brief ?? null, body.by ?? null);
   emitPlanUpdate(project.id, null, "project_create");
   sendJson(res, 200, { project });
+};
+
+// Admin-gated project delete. Cascade-removes the project's tasks/events/deps
+// (FK ON DELETE CASCADE). 404 if it doesn't exist, so a double-tap is harmless.
+const handleProjectDelete: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { id?: string };
+  if (!body.id || typeof body.id !== "string") {
+    return sendError(res, 400, "Missing or invalid 'id' field");
+  }
+  const project = getProject(body.id);
+  if (!project) {
+    return sendError(res, 404, `Project "${body.id}" not found`);
+  }
+  const { tasks } = deleteProject(body.id);
+  emitPlanUpdate(body.id, null, "project_delete");
+  console.log(`[admin-project-delete] ${body.id} ("${project.title}") + ${tasks} task(s)`);
+  sendJson(res, 200, { ok: true, id: body.id, title: project.title, tasks });
 };
 
 const handlePlanGet: RouteHandler = async (req, res) => {
@@ -2058,8 +2150,44 @@ const handleTaskTransition: RouteHandler = async (req, res) => {
     return sendError(res, result.code, result.error);
   }
   emitPlanUpdate(result.task.project_id, result.task.id, "transition");
+  // Board auto-digest v1: auto-seed a logbook row when a task reaches a terminal
+  // OUTCOME (done/blocked) — the WHAT/WHEN timeline, attributed by the hub itself
+  // (zero agent action, no MCP bump, broadcast wakes no one). NARROW by design:
+  // ONLY these two real outcomes, never the routine claimed/in_progress/review
+  // churn (already current-state on the card), so the last-5 view stays
+  // findings-first, not flip-spam. The note prefix marks it as an auto task-row,
+  // distinct from a free-form manual finding. (Converged plan: 15a985 + REFEREE.)
+  maybeAutoSeedTaskLog(result.task, body.actor ?? null, body.note ?? null);
   sendJson(res, 200, { task: result.task });
 };
+
+// Auto-seed mapping: only terminal outcomes become a log row, and they reuse the
+// existing kind vocabulary (done → "done", blocked → "blocker") so the dashboard
+// chips render unchanged. Any other status is intentionally a no-op.
+const AUTO_LOG_KIND_BY_STATUS: Record<string, string> = { done: "done", blocked: "blocker" };
+
+function maybeAutoSeedTaskLog(task: { id: string; title: string; status: string; owner: string | null }, actor: string | null, note: string | null): void {
+  const kind = AUTO_LOG_KIND_BY_STATUS[task.status];
+  if (!kind) return;
+  // Attribute to the task OWNER (whose work it is), not the transition actor: a
+  // review→done is driven by a different APPROVER, but the completion belongs on
+  // the owner's timeline. Fall back to the actor (e.g. owner-driven block), and
+  // skip entirely when neither is set (e.g. an unclaimed parent auto-completing
+  // on child rollup — that's a graph event, not an agent's outcome).
+  const name = (task.owner && task.owner.trim()) || (actor && actor.trim());
+  if (!name) return;
+  const title = (task.title || task.id).trim();
+  const extra = note && note.trim() ? ` — ${note.trim()}` : "";
+  const text = `Task ${task.status}: ${title}${extra}`.slice(0, BOARD_TEXT_MAX);
+  const entry = dbInsertLog(name, kind, text);
+  broadcast({
+    type: "agent_log",
+    name: entry.name,
+    entry: { id: entry.id, ts: entry.ts, kind: entry.kind, note: entry.note },
+    timestamp: entry.ts,
+  });
+  console.log(`[log:auto] ${name} [${kind}]: ${text}`);
+}
 
 // === C4: resource_lock endpoints ===
 // Default lease: 5 minutes. Callers override via lease_ms.
@@ -2534,6 +2662,8 @@ const publicRoutes: Record<string, { method: string; handler: RouteHandler }> = 
   "/loops": { method: "GET", handler: handleLoops },
   "/channels": { method: "GET", handler: handleListChannels },
   "/board": { method: "GET", handler: handleBoard },
+  "/agent-log-tail": { method: "GET", handler: handleAgentLogTail },
+  "/agent-log-digest": { method: "GET", handler: handleAgentLogDigest },
   "/registry": { method: "GET", handler: handleRegistry },
   "/plan-get": { method: "GET", handler: handlePlanGet },
   "/plan-board": { method: "GET", handler: handlePlanBoard },
@@ -2558,6 +2688,7 @@ const joinRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/session-register": { method: "POST", handler: handleSessionRegister },
   "/pending-counts": { method: "GET", handler: handlePendingCounts },
   "/board-update": { method: "POST", handler: handleBoardUpdate },
+  "/agent-log": { method: "POST", handler: handleAgentLog },
   "/project-create": { method: "POST", handler: handleProjectCreate },
   "/task-create": { method: "POST", handler: handleTaskCreate },
   "/task-transition": { method: "POST", handler: handleTaskTransition },
@@ -2649,6 +2780,7 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   // by route table: this one is gated on adminToken, broadcasts project_create, and
   // the cockpit's onPlanUpdate refreshes the picker live.
   "/admin-project-create": { method: "POST", handler: handleProjectCreate },
+  "/admin-project-delete": { method: "POST", handler: handleProjectDelete },
   // Loop governor — operator force-stop: terminate any loop regardless of owner.
   "/loop-admin-stop": { method: "POST", handler: handleLoopAdminStop },
   // Loop governor — operator visibility + override (cockpit, Phase 2): admin-token

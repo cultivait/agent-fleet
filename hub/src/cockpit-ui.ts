@@ -30,6 +30,10 @@ body.cockpit-mode > .container { display: none; }
 .ck-proj { display: flex; align-items: center; gap: 6px; }
 .ck-proj select { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; max-width: 52vw; }
 .ck-demo-flag { font-size: 10px; font-weight: 600; letter-spacing: .04em; color: var(--bg-base); background: var(--yellow); padding: 2px 6px; border-radius: 5px; }
+.ck-del-plan { background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.ck-del-plan:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+.ck-del-plan.armed { background: var(--red); color: var(--bg-base); border-color: var(--red); }
+.ck-del-plan:disabled { opacity: .45; cursor: default; }
 .ck-conn { font-size: 11px; color: var(--text-tertiary); margin-left: auto; display: flex; align-items: center; gap: 5px; }
 .ck-conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
 .ck-conn.stale .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--yellow); }
@@ -454,6 +458,7 @@ export function cockpitMarkup(): string {
           </div>
         </div>
       </div>
+      <button class="ck-del-plan" id="ck-del-plan" type="button" title="Delete the selected plan and its tasks">Delete</button>
     </div>
     <button class="ck-launch-ref" id="ck-launch-ref" title="Spawn a headless referee on this hub (tmux)">+ Referee</button>
     <button class="ck-appr-badge" id="ck-appr-badge" style="display:none" title="Pending approvals — open the Loop page">⚠ approvals <span id="ck-appr-badge-n">0</span></button>
@@ -1502,7 +1507,7 @@ const COCKPIT_SCRIPT = String.raw`
     // populated only once on first Plan open. Refresh the picker list now (fires in
     // any view, before both early-returns) so a plan created via fleet_plan_create
     // appears in #ck-project without a page reload.
-    if (evt && evt.kind === "project_create") loadProjects();
+    if (evt && (evt.kind === "project_create" || evt.kind === "project_delete")) loadProjects();
     // On the Loop page there are no fleet cards to refetch; the loop surfaces self-poll
     // (initLoopCtl/initAppr timers + refresh on switch), so skip the plan refetch path.
     if (S.mainView === "loop") { return; }
@@ -1529,8 +1534,39 @@ const COCKPIT_SCRIPT = String.raw`
   function setProject(pid) {
     S.projectId = pid; S.demo = (pid === "__demo__"); S.openLanes = null; closeDrawer();
     $("ck-demo-flag").style.display = S.demo ? "" : "none";
+    if (_delArmTimer) { clearTimeout(_delArmTimer); _delArmTimer = null; } setDelArmed(false); // disarm delete on plan switch
     setConn(true);
     loadData(renderAll);
+  }
+
+  // ========== Delete plan (admin) — two-tap confirm so a stray tap can't nuke a real plan ==========
+  var _delArmTimer = null;
+  function setDelArmed(on) {
+    var b = $("ck-del-plan"); if (!b) return;
+    b.classList.toggle("armed", on);
+    b.textContent = on ? "Confirm?" : "Delete";
+  }
+  function delPlanClick() {
+    if (!S.projectId) return;                 // nothing selected
+    var b = $("ck-del-plan"); if (!b || b.disabled) return;
+    if (_delArmTimer) { clearTimeout(_delArmTimer); _delArmTimer = null; setDelArmed(false); doDeletePlan(); return; } // 2nd tap → delete
+    setDelArmed(true);
+    _delArmTimer = setTimeout(function () { _delArmTimer = null; setDelArmed(false); }, 4000); // auto-disarm
+  }
+  function doDeletePlan() {
+    var id = S.projectId; var b = $("ck-del-plan"); if (!id) return;
+    if (b) { b.disabled = true; b.textContent = "Deleting…"; }
+    fetch("/admin-project-delete", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: id }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); })
+      .then(function (res) {
+        if (b) b.disabled = false;
+        if (!res.ok) { if (b) { b.textContent = "Failed"; setTimeout(function () { var x = $("ck-del-plan"); if (x) x.textContent = "Delete"; }, 2000); } return; }
+        // Drop the now-gone plan; loadProjects auto-selects the first remaining one.
+        S.projectId = null; S.model = null;
+        if (b) b.textContent = "Delete";
+        loadProjects();
+      })
+      .catch(function () { if (b) { b.disabled = false; b.textContent = "Delete"; } });
   }
 
   // ========== "+ New Plan" (admin create) ==========
@@ -1982,7 +2018,7 @@ const COCKPIT_SCRIPT = String.raw`
   // (vendored, no CDN). WRITABLE by default (full control): keystrokes drive the
   // live session immediately. "Release control" drops to a read-only mirror.
   // Closing tears down the WS + the term.
-  var TERM = { ws: null, term: null, fit: null, callsign: null, readonly: false, status: "", onData: null, resizeHandler: null };
+  var TERM = { ws: null, term: null, fit: null, callsign: null, readonly: false, status: "", onData: null, resizeHandler: null, closing: false, reconnectTimer: null, reconnectDelay: 0 };
 
   // No terminal-local chrome anymore — the active agent name + connection status
   // live on the MAIN app header (#term-active-label). termSetBadge just tracks
@@ -2002,6 +2038,10 @@ const COCKPIT_SCRIPT = String.raw`
     if (typeof Terminal === "undefined") { termSetStatus("xterm.js not loaded"); return; }
     // Tear down any existing session first (one panel at a time).
     closeTerminal();
+    // closeTerminal() armed the intentional-close guard; clear it so drops in THIS
+    // fresh session auto-reconnect, and reset the backoff ladder to 0.5s.
+    TERM.closing = false;
+    TERM.reconnectDelay = 0;
     TERM.callsign = callsign;
     termSetBadge(false); // writable by default (full control) — terminal stays write
     termSetStatus("connecting…"); // surfaces "▶ <callsign> terminal · connecting…" on the main header
@@ -2034,11 +2074,17 @@ const COCKPIT_SCRIPT = String.raw`
   }
 
   function termConnect(ticket) {
+    // Reconnect REUSES the same xterm (so tmux redraws the live screen in place, no
+    // flash) — but the prior onData/resize listeners are still bound to it. Dispose
+    // them before re-binding below, or each keystroke sends Nx and resize stacks.
+    if (TERM.onData && TERM.onData.dispose) { try { TERM.onData.dispose(); } catch (e) {} TERM.onData = null; }
+    if (TERM.resizeHandler) { window.removeEventListener("resize", TERM.resizeHandler); TERM.resizeHandler = null; }
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     var ws = new WebSocket(proto + "//" + location.host + "/terminal?ticket=" + encodeURIComponent(ticket));
     ws.binaryType = "arraybuffer";
     TERM.ws = ws;
     ws.onopen = function () {
+      TERM.reconnectDelay = 0; // healthy connect — reset the backoff ladder
       termSetStatus("connected");
       // Send our size so the mirror matches the panel.
       termSendResize();
@@ -2057,7 +2103,10 @@ const COCKPIT_SCRIPT = String.raw`
         if (TERM.term) TERM.term.write(new Uint8Array(data));
       }
     };
-    ws.onclose = function () { termSetStatus("disconnected"); };
+    ws.onclose = function () {
+      if (TERM.closing) { termSetStatus("disconnected"); return; } // intentional teardown — stay closed
+      termScheduleReconnect(); // unintentional drop (bounce / sleep / proxy idle / blip) → self-heal
+    };
     ws.onerror = function () { termSetStatus("connection error"); };
 
     // Forward keystrokes — the SERVER drops them in read-only mode, but we also
@@ -2072,12 +2121,45 @@ const COCKPIT_SCRIPT = String.raw`
     window.addEventListener("resize", TERM.resizeHandler);
   }
 
+  // Auto-reconnect: on an UNINTENTIONAL drop (hub bounce / laptop sleep / proxy idle /
+  // net blip) re-mint a FRESH single-use ticket and reopen the WS, reattaching the
+  // still-live tmux session — the screen comes back in ~1-2s with no page refresh.
+  // Backoff 0.5→1→2→4→cap 6s, single timer, retries indefinitely (a bounce can take a
+  // few seconds); the mint .catch re-arms so a still-down hub never dead-ends.
+  function termScheduleReconnect() {
+    if (TERM.closing || !TERM.callsign) return;
+    if (TERM.reconnectTimer) { clearTimeout(TERM.reconnectTimer); TERM.reconnectTimer = null; }
+    var delay = TERM.reconnectDelay ? Math.min(TERM.reconnectDelay * 2, 6000) : 500;
+    TERM.reconnectDelay = delay;
+    termSetStatus("reconnecting…");
+    TERM.reconnectTimer = setTimeout(function () {
+      TERM.reconnectTimer = null;
+      if (TERM.closing || !TERM.callsign) return;
+      // Pin THIS retry to its session. An A→B switch mid-fetch flips closing back to
+      // false under B, so guarding the resolve on !closing alone is not enough — also
+      // require the callsign to still be cs, or A's in-flight ticket hijacks B's panel
+      // (resolve) / spuriously re-arms a reconnect on healthy B (reject).
+      var cs = TERM.callsign;
+      // FRESH single-use ticket each attempt (the ticket is one-shot).
+      fetch("/terminal-ticket", { method: "POST", headers: adminHeaders, body: JSON.stringify({ callsign: cs }) })
+        .then(function (r) { return r.ok ? r.json() : r.json().then(function (j) { throw new Error(j.error || ("HTTP " + r.status)); }); })
+        .then(function (j) { if (!TERM.closing && TERM.callsign === cs) termConnect(j.ticket); })
+        .catch(function () { if (!TERM.closing && TERM.callsign === cs) termScheduleReconnect(); }); // hub still down → re-arm, don't dead-end
+    }, delay);
+  }
+
   function termSendResize() {
     if (!TERM.ws || TERM.ws.readyState !== 1 || !TERM.term) return;
     try { TERM.ws.send(JSON.stringify({ type: "resize", cols: TERM.term.cols, rows: TERM.term.rows })); } catch (e) {}
   }
 
   function closeTerminal() {
+    // Arm the intentional-close guard BEFORE .close()ing the ws so its onclose sees
+    // TERM.closing and does NOT schedule a reconnect; cancel any pending reconnect
+    // timer and reset the backoff ladder.
+    TERM.closing = true;
+    if (TERM.reconnectTimer) { clearTimeout(TERM.reconnectTimer); TERM.reconnectTimer = null; }
+    TERM.reconnectDelay = 0;
     if (TERM.resizeHandler) { window.removeEventListener("resize", TERM.resizeHandler); TERM.resizeHandler = null; }
     if (TERM.onData && TERM.onData.dispose) { try { TERM.onData.dispose(); } catch (e) {} TERM.onData = null; }
     if (TERM.ws) { try { TERM.ws.close(); } catch (e) {} TERM.ws = null; }
@@ -2105,6 +2187,7 @@ const COCKPIT_SCRIPT = String.raw`
     $("ck-drawer-back").addEventListener("click", closeDrawer);
     document.addEventListener("keydown", function(e) { if (e.key === "Escape" && S.drawerTaskId) closeDrawer(); });
     $("ck-project").addEventListener("change", function () { setProject(this.value); });
+    var delPlanB = $("ck-del-plan"); if (delPlanB) delPlanB.addEventListener("click", delPlanClick);
     initNewPlan();
     window.addEventListener("resize", function () { if (S.activeView === "dag") renderDagIfVisible(); });
     setInterval(tickLeases, 1000);

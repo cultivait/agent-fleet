@@ -251,6 +251,17 @@ export function getProject(id: string): ProjectRow | undefined {
   return db.prepare("SELECT * FROM project WHERE id = ?").get(id) as ProjectRow | undefined;
 }
 
+// Cascade-delete a project and everything under it. With foreign_keys=ON (set in
+// db.ts) a DELETE FROM project removes its tasks (task.project_id ON DELETE
+// CASCADE), and each task removal cascades to task_event / task_dep. Returns
+// whether a row was removed + the task count that went with it (for the
+// operator's confirmation/audit log).
+export function deleteProject(id: string): { deleted: boolean; tasks: number } {
+  const tasks = (db.prepare("SELECT count(*) AS n FROM task WHERE project_id = ?").get(id) as { n: number }).n;
+  const info = db.prepare("DELETE FROM project WHERE id = ?").run(id);
+  return { deleted: info.changes > 0, tasks };
+}
+
 export function listTasksByProject(projectId: string): TaskRow[] {
   return db.prepare("SELECT * FROM task WHERE project_id = ? ORDER BY created_at").all(projectId) as TaskRow[];
 }
