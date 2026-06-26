@@ -2090,6 +2090,7 @@ const COCKPIT_SCRIPT = String.raw`
       termSendResize();
     };
     ws.onmessage = function (ev) {
+      if (ws !== TERM.ws) return; // orphaned — discard
       var data = ev.data;
       if (typeof data === "string") {
         // Our control frames are JSON beginning with {"__ctl".
@@ -2104,7 +2105,7 @@ const COCKPIT_SCRIPT = String.raw`
       }
     };
     ws.onclose = function () {
-      if (TERM.closing) { termSetStatus("disconnected"); return; } // intentional teardown — stay closed
+      if (TERM.closing || ws !== TERM.ws) { termSetStatus("disconnected"); return; } // intentional teardown OR orphaned ws — stay closed
       termScheduleReconnect(); // unintentional drop (bounce / sleep / proxy idle / blip) → self-heal
     };
     ws.onerror = function () { termSetStatus("connection error"); };

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.10.1 (2026-06-26)
+
+### Fixes
+- **Terminal reconnect resilience** — the cockpit terminal now tolerates two consecutive missed ping/pong heartbeats before terminating the socket, eliminating false-positive disconnects caused by momentary network hiccups.
+- **Orphaned-websocket guards** — message and close handlers from a superseded terminal connection are discarded once a fresh socket is established, preventing a stale handler from triggering a spurious reconnect loop.
+
 ## v1.10.0 (2026-06-26)
 
 ### Features

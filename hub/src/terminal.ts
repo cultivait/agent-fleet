@@ -197,6 +197,9 @@ export class TerminalSession {
   private cols = 80;
   private rows = 24;
   private closed = false;
+  private isAlive = true;
+  private missedPongs = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(ws: WebSocket, ticket: TerminalTicket) {
     this.ws = ws;
@@ -217,6 +220,24 @@ export class TerminalSession {
     this.ws.on("message", (data: Buffer, isBinary: boolean) => this.onWsMessage(data, isBinary));
     this.ws.on("close", () => this.teardown());
     this.ws.on("error", () => this.teardown());
+
+    // Ping/pong heartbeat: tolerate 2 consecutive missed pongs before terminating
+    // to avoid false positives from momentary network hiccups.
+    this.ws.on("pong", () => {
+      this.isAlive = true;
+      this.missedPongs = 0;
+    });
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.isAlive) {
+        this.missedPongs++;
+        if (this.missedPongs >= 2) {
+          this.ws.terminate();
+          return;
+        }
+      }
+      this.isAlive = false;
+      this.ws.ping();
+    }, 30_000);
 
     // Tell the client which mode it's in (writable by default).
     this.sendControl({ type: "mode", readonly: false });
@@ -394,6 +415,10 @@ export class TerminalSession {
   private teardown(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     auditFn({
       kind: "close",
       identity: this.ticket.identity,
