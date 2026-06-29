@@ -1,10 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  registerUser,
-  startTestServer,
-  stopTestServer,
-  type TestContext,
-} from "./helpers/server-harness.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
 let aliceToken: string;
@@ -46,7 +41,11 @@ describe("loop reflexion memory — record, feed back, bound", () => {
 
   it("records a reflection and lists it most-recent-first", async () => {
     const id = await createLoop(aliceToken);
-    const r1 = await post("/loop-reflect", { loop_id: id, reflection: "tried A, failed on edge case", iteration: 1 }, aliceToken);
+    const r1 = await post(
+      "/loop-reflect",
+      { loop_id: id, reflection: "tried A, failed on edge case", iteration: 1 },
+      aliceToken,
+    );
     expect(r1.status).toBe(200);
     expect(((await r1.json()) as { ok: boolean; count: number }).count).toBe(1);
 
@@ -82,7 +81,11 @@ describe("loop reflexion memory — record, feed back, bound", () => {
     const id = await createLoop(aliceToken);
     const CAP = 25; // MAX_REFLECTIONS_PER_LOOP
     for (let i = 1; i <= CAP + 5; i++) {
-      const res = await post("/loop-reflect", { loop_id: id, reflection: `reflection #${i}`, iteration: i }, aliceToken);
+      const res = await post(
+        "/loop-reflect",
+        { loop_id: id, reflection: `reflection #${i}`, iteration: i },
+        aliceToken,
+      );
       expect(res.status).toBe(200);
     }
     const list = await post("/loop-reflections", { loop_id: id, limit: 100 }, aliceToken);

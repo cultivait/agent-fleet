@@ -62,9 +62,10 @@ function formatAge(updatedAt: number): string {
 // screenshots from inflating context. Prefer point-to-point delivery over @all.
 const MAX_IMAGE_B64_CHARS = 512 * 1024;
 
-function imageBlock(
-  img: { data: string; mimeType: string },
-): { type: "image"; data: string; mimeType: string } | { type: "text"; text: string } {
+function imageBlock(img: {
+  data: string;
+  mimeType: string;
+}): { type: "image"; data: string; mimeType: string } | { type: "text"; text: string } {
   if (img.data.length > MAX_IMAGE_B64_CHARS) {
     const kb = Math.round(img.data.length / 1024);
     return {
@@ -209,9 +210,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   const registerTool = (
     fleetName: string,
     description: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: server.tool is overloaded; a precise type resolves to the wrong overload (see note above)
     schema: any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: server.tool is overloaded; a precise type resolves to the wrong overload (see note above)
     handler: (args: any) => any,
   ) => {
     server.tool(fleetName, description, schema, handler);
@@ -313,7 +314,12 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     async () => {
       if (!currentToken) {
         return {
-          content: [{ type: "text" as const, text: "Cannot claim REFEREE: not joined to the fleet (no session token). Call fleet_join first." }],
+          content: [
+            {
+              type: "text" as const,
+              text: "Cannot claim REFEREE: not joined to the fleet (no session token). Call fleet_join first.",
+            },
+          ],
           isError: true,
         };
       }
@@ -344,7 +350,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
           };
         }
         return {
-          content: [{ type: "text" as const, text: `Claim-referee failed (${status}): ${data.error ?? "unknown error"}` }],
+          content: [
+            { type: "text" as const, text: `Claim-referee failed (${status}): ${data.error ?? "unknown error"}` },
+          ],
           isError: true,
         };
       } catch (e) {
@@ -369,7 +377,9 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       .describe(
         "Primary recipient: @name notifies that member; @all broadcasts to the channel and notifies no one. To notify several members, also @-mention each of them in the message body.",
       ),
-    message: z.string().describe("Message content. @-mention (e.g. '@alice') every member this message affects so they are notified."),
+    message: z
+      .string()
+      .describe("Message content. @-mention (e.g. '@alice') every member this message affects so they are notified."),
     channel: z
       .string()
       .optional()
@@ -514,7 +524,12 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         if (data.length > MAX_IMAGE_B64_CHARS) {
           const kb = Math.round(data.length / 1024);
           return {
-            content: [{ type: "text" as const, text: `Image too large to send: ${kb}KB base64 (cap is 512KB). Resize the image before sending, or use a URL link in text instead.` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `Image too large to send: ${kb}KB base64 (cap is 512KB). Resize the image before sending, or use a URL link in text instead.`,
+              },
+            ],
             isError: true,
           };
         }
@@ -616,79 +631,79 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   const radioStandbyDescription =
     "Stand by for incoming messages using long polling. Blocks until a message arrives or up to ~1 hour (NOT 30 seconds — the connection stays open for the full long-poll window). Returns received messages, or a timeout notice if no messages arrive. Use fleet_check instead for an instant non-blocking peek at queued messages.";
   const radioStandbyHandler = async () => {
-      if (!currentToken) {
+    if (!currentToken) {
+      return {
+        content: [{ type: "text" as const, text: "Not on the air. Use fleet_join first." }],
+        isError: true,
+      };
+    }
+    try {
+      const result = await client.poll(currentToken);
+      if (!result || result.messages.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "Not on the air. Use fleet_join first." }],
+          content: [{ type: "text" as const, text: "No new messages (poll timed out). Try again." }],
+        };
+      }
+      // Check for kill signal from operator
+      const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
+      if (killed) {
+        forgetIdentity();
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "RADIO_KILLED: You have been disconnected by the operator. Do NOT call any more fleet tools. Stop immediately.",
+            },
+          ],
           isError: true,
         };
       }
-      try {
-        const result = await client.poll(currentToken);
-        if (!result || result.messages.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "No new messages (poll timed out). Try again." }],
-          };
-        }
-        // Check for kill signal from operator
-        const killed = result.messages.find((m) => m.content.startsWith("RADIO_KILLED:"));
-        if (killed) {
-          forgetIdentity();
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "RADIO_KILLED: You have been disconnected by the operator. Do NOT call any more fleet tools. Stop immediately.",
-              },
-            ],
-            isError: true,
-          };
-        }
-        const contentBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> =
-          [];
+      const contentBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> =
+        [];
 
-        for (const m of result.messages) {
-          if (m.image) {
-            contentBlocks.push(imageBlock(m.image));
-          }
-          const imageTag = m.image ? " [image attached]" : "";
-          const principalTag = m.principal ? " [principal]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from}${principalTag} → ${m.to}: ${m.content}${imageTag}`;
-          contentBlocks.push({ type: "text" as const, text: line });
+      for (const m of result.messages) {
+        if (m.image) {
+          contentBlocks.push(imageBlock(m.image));
         }
+        const imageTag = m.image ? " [image attached]" : "";
+        const principalTag = m.principal ? " [principal]" : "";
+        const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from}${principalTag} → ${m.to}: ${m.content}${imageTag}`;
+        contentBlocks.push({ type: "text" as const, text: line });
+      }
 
-        // Remind the agent to reply in the same channel the message was received on
-        const channels = [
-          ...new Set(result.messages.filter((m) => m.channel && m.channel !== "#all").map((m) => m.channel)),
-        ];
-        const hint =
-          channels.length > 0
-            ? `\n\nIMPORTANT: Reply in the same channel you received the message on. Use the channel parameter: ${channels.map((c) => `"${c}"`).join(", ")}`
-            : "";
-        if (hint) {
-          contentBlocks.push({ type: "text" as const, text: hint });
-        }
+      // Remind the agent to reply in the same channel the message was received on
+      const channels = [
+        ...new Set(result.messages.filter((m) => m.channel && m.channel !== "#all").map((m) => m.channel)),
+      ];
+      const hint =
+        channels.length > 0
+          ? `\n\nIMPORTANT: Reply in the same channel you received the message on. Use the channel parameter: ${channels.map((c) => `"${c}"`).join(", ")}`
+          : "";
+      if (hint) {
+        contentBlocks.push({ type: "text" as const, text: hint });
+      }
+      return {
+        content: contentBlocks,
+      };
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg === "Unauthorized") {
+        forgetIdentity();
         return {
-          content: contentBlocks,
-        };
-      } catch (e) {
-        const msg = (e as Error).message;
-        if (msg === "Unauthorized") {
-          forgetIdentity();
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "RADIO_KILLED: You have been disconnected by the operator. Do NOT call any more fleet tools. Stop immediately.",
-              },
-            ],
-            isError: true,
-          };
-        }
-        return {
-          content: [{ type: "text" as const, text: `Poll failed: ${msg}` }],
+          content: [
+            {
+              type: "text" as const,
+              text: "RADIO_KILLED: You have been disconnected by the operator. Do NOT call any more fleet tools. Stop immediately.",
+            },
+          ],
           isError: true,
         };
       }
+      return {
+        content: [{ type: "text" as const, text: `Poll failed: ${msg}` }],
+        isError: true,
+      };
+    }
   };
 
   // Primary: "standby" reads acceptably. registerTool also derives radio_standby.
@@ -868,7 +883,11 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "Meta-harness: move a task to a new lifecycle status (e.g. ratified, in_progress, review, done, blocked, failed, abandoned). Enforced by the hub's allow-list state machine.",
     {
       task_id: z.string().describe("ID of the task to transition (required)."),
-      to: z.string().describe("Target status (required), e.g. ratified | in_progress | review | done | blocked | failed | abandoned."),
+      to: z
+        .string()
+        .describe(
+          "Target status (required), e.g. ratified | in_progress | review | done | blocked | failed | abandoned.",
+        ),
       actor: z.string().optional().describe("Optional actor/callsign recording who performed the transition."),
       note: z.string().optional().describe("Optional note explaining the transition."),
     },
@@ -1030,7 +1049,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     },
     async ({ project_id, verbose }) => {
       try {
-        const result = await client.planGet(project_id) as {
+        const result = (await client.planGet(project_id)) as {
           project?: { id: string; title: string };
           tasks?: TerseTask[];
           deps?: Array<{ task_id: string; blocks_on: string }>;
@@ -1043,7 +1062,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const deps = result.deps ?? [];
         const header = proj ? `Project: ${proj.title} (${proj.id})` : `Project: ${project_id}`;
         const byStatus: Record<string, TerseTask[]> = {};
-        for (const t of tasks) (byStatus[t.status] ??= []).push(t);
+        for (const t of tasks) {
+          byStatus[t.status] ??= [];
+          byStatus[t.status].push(t);
+        }
         const lines = [header, `${tasks.length} task(s):`];
         for (const [status, group] of Object.entries(byStatus)) {
           lines.push(`  ${status} (${group.length}):`);
@@ -1069,7 +1091,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     },
     async ({ project_id, verbose }) => {
       try {
-        const result = await client.planBoard(project_id) as {
+        const result = (await client.planBoard(project_id)) as {
           project?: { id: string; title: string };
           lanes?: Record<string, TerseTask[]>;
           deps?: Array<{ task_id: string; blocks_on: string }>;
@@ -1107,7 +1129,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     },
     async ({ owner_sid, verbose }) => {
       try {
-        const result = await client.planOwned(owner_sid) as { tasks?: TerseTask[] };
+        const result = (await client.planOwned(owner_sid)) as { tasks?: TerseTask[] };
         if (verbose) {
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
         }
@@ -1135,7 +1157,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     },
     async ({ verbose }) => {
       try {
-        const result = await client.tasksReady() as { tasks?: TerseTask[] };
+        const result = (await client.tasksReady()) as { tasks?: TerseTask[] };
         if (verbose) {
           return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
         }
@@ -1164,8 +1186,16 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     },
     async ({ task_id, verbose }) => {
       try {
-        const result = await client.taskHandoffs(task_id) as {
-          handoffs?: Array<{ id: number; ts: number; actor: string | null; summary: string; next_step: string | null; blockers: string[]; system: boolean }>;
+        const result = (await client.taskHandoffs(task_id)) as {
+          handoffs?: Array<{
+            id: number;
+            ts: number;
+            actor: string | null;
+            summary: string;
+            next_step: string | null;
+            blockers: string[];
+            system: boolean;
+          }>;
           artifacts?: Array<{ kind: string; uri: string; note?: string | null }>;
         };
         if (verbose) {
@@ -1370,8 +1400,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       }
       try {
         const result = await client.ack(currentToken, msg_id);
-        const unblockedStr =
-          result.unblocked.length > 0 ? ` Unblocked task(s): ${result.unblocked.join(", ")}.` : "";
+        const unblockedStr = result.unblocked.length > 0 ? ` Unblocked task(s): ${result.unblocked.join(", ")}.` : "";
         return {
           content: [{ type: "text" as const, text: `ACK sent for ${msg_id}.${unblockedStr}` }],
         };
@@ -1390,26 +1419,30 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "fleet_lock_acquire",
     "Meta-harness: acquire a named resource lock so this session is the sole permitted writer. Fails (409) if another session holds a live lease. Fail-open: if the hub is unreachable, the agent should proceed without the lock.",
     {
-      resource_key: z.string().describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:appdb' (required)."),
-      lease_ms: z
-        .number()
-        .optional()
-        .describe("Lease duration in milliseconds. Defaults to 300000 (5 min)."),
-      owner_sid: z
+      resource_key: z
         .string()
-        .optional()
-        .describe("Session id to bind the lock to. Defaults to CLAUDE_CODE_SESSION_ID."),
+        .describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:appdb' (required)."),
+      lease_ms: z.number().optional().describe("Lease duration in milliseconds. Defaults to 300000 (5 min)."),
+      owner_sid: z.string().optional().describe("Session id to bind the lock to. Defaults to CLAUDE_CODE_SESSION_ID."),
     },
     async ({ resource_key, lease_ms, owner_sid }) => {
       try {
         const sid = resolveOwnerSid(owner_sid, process.env.CLAUDE_CODE_SESSION_ID);
         if (!sid) {
-          return { content: [{ type: "text" as const, text: "Lock acquire failed: no owner_sid (and CLAUDE_CODE_SESSION_ID unset)" }], isError: true };
+          return {
+            content: [
+              { type: "text" as const, text: "Lock acquire failed: no owner_sid (and CLAUDE_CODE_SESSION_ID unset)" },
+            ],
+            isError: true,
+          };
         }
         const result = await client.lockAcquire(joinToken, { resource_key, owner_sid: sid, lease_ms });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Lock acquire failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Lock acquire failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1431,7 +1464,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.lockRenew(joinToken, { resource_key, owner_sid: sid, lease_ms });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Lock renew failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Lock renew failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1452,7 +1488,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.lockRelease(joinToken, { resource_key, owner_sid: sid });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Lock release failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Lock release failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1528,14 +1567,18 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
               completeness_target: z
                 .number()
                 .optional()
-                .describe("Accept (guardrail) when reported completeness >= this, even if the judge keeps saying retry."),
+                .describe(
+                  "Accept (guardrail) when reported completeness >= this, even if the judge keeps saying retry.",
+                ),
               plateau: z
                 .object({ window: z.number(), epsilon: z.number() })
                 .optional()
                 .describe("Stop with 'plateau' when the last `window` completeness scores span <= epsilon."),
             })
             .optional()
-            .describe("Evaluator-optimizer guardrails for kind:'evaluator_optimizer' loops (use with fleet_loop_verdict)."),
+            .describe(
+              "Evaluator-optimizer guardrails for kind:'evaluator_optimizer' loops (use with fleet_loop_verdict).",
+            ),
           fleet_pool: z.string().nullable().optional().describe("Seam for a future fleet-wide quota pool."),
         })
         .optional()
@@ -1566,7 +1609,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop create failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop create failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1596,7 +1642,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop tick failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop tick failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1627,7 +1676,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopVerdict(currentToken, { id, verdict, iteration_delta, tokens_delta });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop verdict failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop verdict failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1641,7 +1693,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopLifecycle(currentToken, "/loop-pause", { id });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop pause failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop pause failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1655,7 +1710,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopLifecycle(currentToken, "/loop-resume", { id });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop resume failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop resume failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1672,7 +1730,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopLifecycle(currentToken, "/loop-stop", { id, reason });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop stop failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop stop failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1686,7 +1747,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopGet(currentToken, id);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop get failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop get failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1703,7 +1767,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopList(currentToken, { status, owner_callsign });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop list failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop list failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1718,7 +1785,12 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
       const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
       if (!adminToken) {
         return {
-          content: [{ type: "text" as const, text: "Cannot force-stop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment." }],
+          content: [
+            {
+              type: "text" as const,
+              text: "Cannot force-stop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment.",
+            },
+          ],
           isError: true,
         };
       }
@@ -1726,7 +1798,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopAdminStop(adminToken, id, reason);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop admin-stop failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop admin-stop failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );
@@ -1797,7 +1872,10 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         const result = await client.loopBind(currentToken, { id, criteria, project_id });
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text" as const, text: `Loop bind failed: ${(e as Error).message}` }], isError: true };
+        return {
+          content: [{ type: "text" as const, text: `Loop bind failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );

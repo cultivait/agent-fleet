@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCockpitModel, STATUS_META, type PlanBoard, type PlanTask, type Presence } from "../cockpit-model.js";
+import { buildCockpitModel, type PlanBoard, type PlanTask, type Presence, STATUS_META } from "../cockpit-model.js";
 
 const task = (o: Partial<PlanTask> & { id: string; status: string }): PlanTask => ({
   project_id: "p1",
@@ -28,7 +28,10 @@ const board = (lanes: Record<string, PlanTask[]>, extra: Partial<PlanBoard> = {}
 
 describe("buildCockpitModel — lanes", () => {
   it("returns lanes in canonical status order with labels, groups and counts", () => {
-    const m = buildCockpitModel(board({ done: [task({ id: "d1", status: "done" })], ready: [task({ id: "r1", status: "ready" })] }), []);
+    const m = buildCockpitModel(
+      board({ done: [task({ id: "d1", status: "done" })], ready: [task({ id: "r1", status: "ready" })] }),
+      [],
+    );
     const statuses = m.lanes.map((l) => l.status);
     expect(statuses.indexOf("ready")).toBeLessThan(statuses.indexOf("done"));
     const ready = m.lanes.find((l) => l.status === "ready")!;
@@ -57,20 +60,29 @@ describe("buildCockpitModel — owner resolution", () => {
   const presence: Presence[] = [{ sid: "sid-aaa", name: "linux-255c", online: true }];
 
   it("resolves owner_sid to a live callsign + online from presence", () => {
-    const m = buildCockpitModel(board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-aaa", owner: "stale" })] }), presence);
+    const m = buildCockpitModel(
+      board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-aaa", owner: "stale" })] }),
+      presence,
+    );
     const t = m.byId["t1"];
     expect(t.ownerLabel).toBe("linux-255c");
     expect(t.ownerOnline).toBe(true);
   });
 
   it("falls back to the stored owner name when the sid is not in presence", () => {
-    const m = buildCockpitModel(board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-zzz", owner: "linux-old" })] }), presence);
+    const m = buildCockpitModel(
+      board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-zzz", owner: "linux-old" })] }),
+      presence,
+    );
     expect(m.byId["t1"].ownerLabel).toBe("linux-old");
     expect(m.byId["t1"].ownerOnline).toBe(false);
   });
 
   it("falls back to a short sid when there is neither presence nor a stored owner", () => {
-    const m = buildCockpitModel(board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-zzzzzzzz" })] }), presence);
+    const m = buildCockpitModel(
+      board({ claimed: [task({ id: "t1", status: "claimed", owner_sid: "sid-zzzzzzzz" })] }),
+      presence,
+    );
     expect(m.byId["t1"].ownerLabel).toBe("sid-zz");
   });
 });
@@ -79,8 +91,19 @@ describe("buildCockpitModel — deps + child rollup", () => {
   it("counts blockers (blockedBy) and dependents (blocks) and exposes the adjacency", () => {
     const m = buildCockpitModel(
       board(
-        { ready: [task({ id: "a", status: "ready" }), task({ id: "b", status: "ready" }), task({ id: "c", status: "ready" })] },
-        { deps: [{ task_id: "c", blocks_on: "a" }, { task_id: "c", blocks_on: "b" }] },
+        {
+          ready: [
+            task({ id: "a", status: "ready" }),
+            task({ id: "b", status: "ready" }),
+            task({ id: "c", status: "ready" }),
+          ],
+        },
+        {
+          deps: [
+            { task_id: "c", blocks_on: "a" },
+            { task_id: "c", blocks_on: "b" },
+          ],
+        },
       ),
       [],
     );
@@ -92,7 +115,10 @@ describe("buildCockpitModel — deps + child rollup", () => {
 
   it("attaches the child rollup summary when present", () => {
     const m = buildCockpitModel(
-      board({ in_progress: [task({ id: "parent", status: "in_progress" })] }, { childSummaries: { parent: { total: 4, terminal: 2, done: 2 } } }),
+      board(
+        { in_progress: [task({ id: "parent", status: "in_progress" })] },
+        { childSummaries: { parent: { total: 4, terminal: 2, done: 2 } } },
+      ),
       [],
     );
     expect(m.byId["parent"].childSummary).toEqual({ total: 4, terminal: 2, done: 2 });

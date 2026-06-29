@@ -83,9 +83,7 @@ export function summarizeLoopSchedule(loop: Loop, nowMs: number): LoopScheduleVi
       ? fireDrift(loop.anchor_ms as number, loop.interval_ms as number, loop.last_fire_ms)
       : null;
   const overdue =
-    recurring && loop.status === "running" && loop.next_fire_ms != null
-      ? Math.max(0, nowMs - loop.next_fire_ms)
-      : null;
+    recurring && loop.status === "running" && loop.next_fire_ms != null ? Math.max(0, nowMs - loop.next_fire_ms) : null;
   return {
     id: loop.id,
     label: loop.label,

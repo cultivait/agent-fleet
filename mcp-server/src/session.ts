@@ -7,10 +7,7 @@
 // model to pass it) is what makes board-join (3B) and lease-heartbeat (4B) hit the
 // right task. An explicit caller value still wins so a coordinator can claim on
 // another session's behalf and tests stay deterministic.
-export function resolveOwnerSid(
-  explicit?: string | null,
-  env?: string | undefined,
-): string | undefined {
+export function resolveOwnerSid(explicit?: string | null, env?: string | undefined): string | undefined {
   const e = typeof explicit === "string" ? explicit.trim() : "";
   if (e) return e;
   const v = typeof env === "string" ? env.trim() : "";

@@ -9,7 +9,7 @@
       "name": "agent-fleet",
       "source": "./plugin",
       "description": "A lightweight communication layer for AI agents",
-      "version": "1.11.0",
+      "version": "1.11.1",
       "author": {
         "name": "suruseas"
       }

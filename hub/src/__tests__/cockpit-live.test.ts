@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildLiveModel, type RawBoardEntry } from "../cockpit-live.js";
 
 function raw(o: Partial<RawBoardEntry> & { name: string }): RawBoardEntry {
@@ -48,7 +48,9 @@ describe("buildLiveModel", () => {
 
   it("passes through mission, activity, todos, subagents, sid, node", () => {
     const todos = [{ content: "do it", status: "completed" }];
-    const result = buildLiveModel([raw({ name: "a", mission: "m", activity: "act", todos, subagents: 3, sid: "s1", node: "mac" })]);
+    const result = buildLiveModel([
+      raw({ name: "a", mission: "m", activity: "act", todos, subagents: 3, sid: "s1", node: "mac" }),
+    ]);
     expect(result[0].mission).toBe("m");
     expect(result[0].activity).toBe("act");
     expect(result[0].todos).toEqual(todos);
@@ -58,10 +60,7 @@ describe("buildLiveModel", () => {
   });
 
   it("sorts online before offline", () => {
-    const result = buildLiveModel([
-      raw({ name: "b", online: false }),
-      raw({ name: "a", online: true }),
-    ]);
+    const result = buildLiveModel([raw({ name: "b", online: false }), raw({ name: "a", online: true })]);
     expect(result[0].name).toBe("a");
     expect(result[1].name).toBe("b");
   });
@@ -76,10 +75,7 @@ describe("buildLiveModel", () => {
   });
 
   it("sorts alphabetically within same liveness tier", () => {
-    const result = buildLiveModel([
-      raw({ name: "linux-z", online: true }),
-      raw({ name: "linux-a", online: true }),
-    ]);
+    const result = buildLiveModel([raw({ name: "linux-z", online: true }), raw({ name: "linux-a", online: true })]);
     expect(result[0].name).toBe("linux-a");
     expect(result[1].name).toBe("linux-z");
   });

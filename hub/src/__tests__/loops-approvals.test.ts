@@ -1,10 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  registerUser,
-  startTestServer,
-  stopTestServer,
-  type TestContext,
-} from "./helpers/server-harness.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
 let aliceToken: string;
@@ -136,9 +131,11 @@ describe("loop HITL approval queue — escalate → pause → operator decision"
   });
 
   it("validates decision and 404s an unknown approval", async () => {
-    expect((await post("/loop-approval-resolve", { id: "appr_x", decision: "maybe" }, ctx.adminToken)).status).toBe(400);
-    expect((await post("/loop-approval-resolve", { id: "appr_nope", decision: "approve" }, ctx.adminToken)).status).toBe(
-      404,
+    expect((await post("/loop-approval-resolve", { id: "appr_x", decision: "maybe" }, ctx.adminToken)).status).toBe(
+      400,
     );
+    expect(
+      (await post("/loop-approval-resolve", { id: "appr_nope", decision: "approve" }, ctx.adminToken)).status,
+    ).toBe(404);
   });
 });

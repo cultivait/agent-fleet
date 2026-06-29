@@ -635,9 +635,7 @@ export function cockpitMarkup(): string {
 // never fail-open. Function-replacer (not a string pattern) so a "$"-bearing token is inserted
 // verbatim.
 export function cockpitScript(token: string = "", operatorName: string = "Operator"): string {
-  return COCKPIT_SCRIPT
-    .replace("__WT_ADMIN_TOKEN__", () => token)
-    .replace("__WT_OPERATOR_NAME__", () => operatorName);
+  return COCKPIT_SCRIPT.replace("__WT_ADMIN_TOKEN__", () => token).replace("__WT_OPERATOR_NAME__", () => operatorName);
 }
 
 const COCKPIT_SCRIPT = String.raw`

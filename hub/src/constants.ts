@@ -13,4 +13,5 @@
 // it directly; the two browser copies (cockpit-ui.ts / dashboard.ts) INJECT this value
 // into their template strings at build time — browser JS can't import a TS const, but it
 // can receive the canonical number, so all four sites stay in lockstep by construction.
-export const STALL_BEAT_MS = parseInt(process.env.AF_STALL_BEAT_SECONDS ?? process.env.WT_STALL_BEAT_SECONDS ?? "3600", 10) * 1000;
+export const STALL_BEAT_MS =
+  parseInt(process.env.AF_STALL_BEAT_SECONDS ?? process.env.WT_STALL_BEAT_SECONDS ?? "3600", 10) * 1000;

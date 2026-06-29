@@ -30,16 +30,15 @@ describe("C1: per-channel seq monotonicity", () => {
     }
 
     // Drain inbox and verify seq on delivered messages
-    const inboxRes = await fetch(`${ctx.baseUrl}/inbox`, {
+    await fetch(`${ctx.baseUrl}/inbox`, {
       headers: {
         Authorization: `Bearer ${await registerUser(ctx, "seq-recv-drain")}`,
       },
     });
     // Use admin history instead — inbox is per-user, recv already has messages
-    const histRes = await fetch(
-      `${ctx.baseUrl}/admin-channel-history?channel=${encodeURIComponent("#all")}&limit=20`,
-      { headers: { Authorization: `Bearer ${ctx.adminToken}` } },
-    );
+    const histRes = await fetch(`${ctx.baseUrl}/admin-channel-history?channel=${encodeURIComponent("#all")}&limit=20`, {
+      headers: { Authorization: `Bearer ${ctx.adminToken}` },
+    });
     expect(histRes.status).toBe(200);
     const hist = (await histRes.json()) as { messages: Array<{ id: string; seq?: number }> };
 

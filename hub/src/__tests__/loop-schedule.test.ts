@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  computeNextFire,
-  fireDrift,
-  scheduledFireAtOrBefore,
-  summarizeLoopSchedule,
-} from "../loops/schedule.js";
+import { computeNextFire, fireDrift, scheduledFireAtOrBefore, summarizeLoopSchedule } from "../loops/schedule.js";
 import type { Loop } from "../loops/store.js";
 
 const I = 60_000; // 1-minute interval

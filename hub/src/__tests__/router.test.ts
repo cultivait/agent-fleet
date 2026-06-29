@@ -2,14 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { registerUser, resetAuthState } from "../auth.js";
 import { initGeneralChannel, joinChannel, resetChannelState } from "../channels.js";
 import { dbCreateChannel, initDB } from "../db.js";
-import {
-  drainQueue,
-  ensureQueue,
-  pendingCounts,
-  removeQueue,
-  resetRouterState,
-  routeMessage,
-} from "../router.js";
+import { drainQueue, ensureQueue, pendingCounts, removeQueue, resetRouterState, routeMessage } from "../router.js";
 
 beforeEach(() => {
   process.env.WALKIE_TALKIE_DB_PATH = ":memory:";

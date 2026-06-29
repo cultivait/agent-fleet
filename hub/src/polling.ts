@@ -74,9 +74,7 @@ export function setOffline(userName: string): void {
 // status='signed_off'. CONSERVATIVE — only when a live sibling exists. If ALL handles are dead (full
 // reboot, no tmux), the offline-sweep alone applies and NO row is signed_off. Liveness is probed with
 // the SAME tmuxHasSession helper terminal.ts resolves sessions with; `hasSession` is injectable for tests.
-export function reconcilePresenceFromRegistry(
-  hasSession: (session: string) => boolean = tmuxHasSession,
-): void {
+export function reconcilePresenceFromRegistry(hasSession: (session: string) => boolean = tmuxHasSession): void {
   // Group rows by callsign so the sweep marks each callsign once AND the reconcile sees its siblings.
   const byCallsign = new Map<string, RegistryEntry[]>();
   for (const row of dbListRegistry()) {

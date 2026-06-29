@@ -15,8 +15,11 @@
 // lives in external per-host JSONL ledgers read by the metrics pipeline). A future
 // fleet-wide Max-quota pool MUST cross-check that external ledger; this per-loop counter
 // is the local guardrail, not the authoritative quota.
-import type Database from "better-sqlite3";
+
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
+// openApproval (below) opens the HITL queue item; createApproval is the txn-free INSERT.
+import { createApproval } from "./approvals.js";
 import { computeNextFire, fireDrift } from "./schedule.js";
 import {
   type AcceptanceCriteria,
@@ -26,8 +29,6 @@ import {
   type Verdict,
   type VerdictStopReason,
 } from "./verdict.js";
-// openApproval (below) opens the HITL queue item; createApproval is the txn-free INSERT.
-import { createApproval } from "./approvals.js";
 
 // Item 2 (loop-goal) adds two PRE-RUN states to the original four:
 //   draft            — operator authored a goal; nothing running yet.
@@ -51,7 +52,7 @@ export type StopReason =
   // "escalated" (HITL): verifier recommended escalate → loop PAUSED + approval opened.
   | VerdictStopReason;
 
-export type { Verdict, AcceptanceCriteria } from "./verdict.js";
+export type { AcceptanceCriteria, Verdict } from "./verdict.js";
 
 // Composable stop-conditions (all optional; evaluated OR-wise, first-trip-wins).
 export interface LoopConfig {
@@ -67,7 +68,6 @@ export interface LoopConfig {
   // Seam for a future fleet-wide pool. Phase 1 ignores the value beyond recording it.
   fleet_pool?: string | null;
 }
-
 
 // Mutable per-loop counters + the short ring buffers for repetition/diminishing detection.
 export interface LoopState {
@@ -258,9 +258,7 @@ function parseRow(row: LoopRow): Loop {
     last_fire_ms: row.last_fire_ms ?? null,
     next_fire_ms: row.next_fire_ms ?? null,
     goal: row.goal ?? null,
-    acceptance_criteria: row.acceptance_criteria
-      ? (JSON.parse(row.acceptance_criteria) as AcceptanceCriteria)
-      : null,
+    acceptance_criteria: row.acceptance_criteria ? (JSON.parse(row.acceptance_criteria) as AcceptanceCriteria) : null,
     auto_approve: !!row.auto_approve,
     project_id: row.project_id ?? null,
   };
@@ -557,9 +555,7 @@ export function tickLoop(id: string, input: TickInput): TickResult {
     // because it depends on whether the loop keeps running.)
     const recurring = loop.interval_ms != null;
     const lastFire = recurring ? now : loop.last_fire_ms;
-    const driftMs = recurring
-      ? fireDrift(loop.anchor_ms as number, loop.interval_ms as number, now)
-      : undefined;
+    const driftMs = recurring ? fireDrift(loop.anchor_ms as number, loop.interval_ms as number, now) : undefined;
 
     // Phase 4↔5 HITL gate — escalate PAUSES (resumable), it does NOT terminally stop: a
     // stopped loop can't be resumed, which would strand the human-approval flow.
@@ -609,9 +605,13 @@ export function tickLoop(id: string, input: TickInput): TickResult {
       }
       return stopped;
     }
-    db.prepare(
-      "UPDATE loops SET state = ?, updated_at = ?, last_fire_ms = ?, next_fire_ms = ? WHERE id = ?",
-    ).run(JSON.stringify(state), now, lastFire, nextFire, id);
+    db.prepare("UPDATE loops SET state = ?, updated_at = ?, last_fire_ms = ?, next_fire_ms = ? WHERE id = ?").run(
+      JSON.stringify(state),
+      now,
+      lastFire,
+      nextFire,
+      id,
+    );
     const cont: TickResult = { continue: true };
     if (recurring) {
       cont.last_fire_ms = now;
@@ -662,9 +662,10 @@ export function openApproval(loopId: string, verdict: Verdict): string {
   if (!loop) throw new Error(`Loop "${loopId}" not found`);
   // Only park a live loop; an already paused/stopped loop keeps its recorded reason.
   if (loop.status === "running") {
-    db.prepare(
-      "UPDATE loops SET status = 'paused', stop_reason = 'escalated', updated_at = ? WHERE id = ?",
-    ).run(Date.now(), loopId);
+    db.prepare("UPDATE loops SET status = 'paused', stop_reason = 'escalated', updated_at = ? WHERE id = ?").run(
+      Date.now(),
+      loopId,
+    );
   }
   const approval = createApproval({
     loop_id: loopId,
@@ -705,9 +706,11 @@ export function stopLoop(id: string, reason: StopReason = "external_terminate"):
   const loop = getLoop(id);
   if (!loop) return undefined;
   if (loop.status !== "stopped" && loop.status !== "completed") {
-    db.prepare(
-      "UPDATE loops SET status = 'stopped', stop_reason = ?, updated_at = ? WHERE id = ?",
-    ).run(reason, Date.now(), id);
+    db.prepare("UPDATE loops SET status = 'stopped', stop_reason = ?, updated_at = ? WHERE id = ?").run(
+      reason,
+      Date.now(),
+      id,
+    );
   }
   return getLoop(id);
 }

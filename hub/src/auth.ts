@@ -1,4 +1,4 @@
-import { createPublicKey, type JsonWebKey as CryptoJsonWebKey, randomBytes, verify as cryptoVerify } from "node:crypto";
+import { type JsonWebKey as CryptoJsonWebKey, createPublicKey, verify as cryptoVerify, randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { removeUserFromAllChannels } from "./channels.js";
 import type { User, UserRole } from "./types.js";

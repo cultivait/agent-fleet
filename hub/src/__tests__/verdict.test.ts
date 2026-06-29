@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  evaluateVerdict,
-  normalizeVerdict,
-  type Verdict,
-} from "../loops/verdict.js";
+import { evaluateVerdict, normalizeVerdict, type Verdict } from "../loops/verdict.js";
 
 function verdict(partial: Partial<Verdict> = {}): Verdict {
   return {
@@ -47,7 +43,6 @@ describe("normalizeVerdict — validation + coercion at the boundary", () => {
     const v = normalizeVerdict({
       status: "partial",
       completeness: 0.5,
-      // biome-ignore lint: intentionally malformed input
       missing: ["ok", 5, null, "fine"],
       recommendation: "retry",
     } as unknown);
@@ -58,9 +53,9 @@ describe("normalizeVerdict — validation + coercion at the boundary", () => {
   it("throws on a non-object, bad status, bad recommendation, or non-finite completeness", () => {
     expect(() => normalizeVerdict(null)).toThrow(/object/);
     expect(() => normalizeVerdict(verdict({ status: "done" as unknown as Verdict["status"] }))).toThrow(/status/);
-    expect(() =>
-      normalizeVerdict(verdict({ recommendation: "stop" as unknown as Verdict["recommendation"] })),
-    ).toThrow(/recommendation/);
+    expect(() => normalizeVerdict(verdict({ recommendation: "stop" as unknown as Verdict["recommendation"] }))).toThrow(
+      /recommendation/,
+    );
     expect(() => normalizeVerdict(verdict({ completeness: Number.NaN }))).toThrow(/completeness/);
     expect(() => normalizeVerdict({ status: "partial", recommendation: "retry" })).toThrow(/completeness/);
   });
@@ -93,17 +88,13 @@ describe("evaluateVerdict — accept / escalate / target / plateau / continue", 
   it("completeness_target overrides a stuck 'retry' judge -> accepted", () => {
     const eo = { completeness_target: 0.95 };
     expect(evaluateVerdict(eo, [0.9], verdict({ recommendation: "retry", completeness: 0.9 }))).toBeNull();
-    expect(evaluateVerdict(eo, [0.96], verdict({ recommendation: "retry", completeness: 0.96 }))).toBe(
-      "accepted",
-    );
+    expect(evaluateVerdict(eo, [0.96], verdict({ recommendation: "retry", completeness: 0.96 }))).toBe("accepted");
   });
 
   it("plateau trips when the last `window` scores span <= epsilon", () => {
     const eo = { plateau: { window: 3, epsilon: 0.02 } };
     // span 0.01 <= 0.02 over the last 3 -> plateau
-    expect(evaluateVerdict(eo, [0.4, 0.8, 0.81, 0.8], verdict({ recommendation: "retry" }))).toBe(
-      "plateau",
-    );
+    expect(evaluateVerdict(eo, [0.4, 0.8, 0.81, 0.8], verdict({ recommendation: "retry" }))).toBe("plateau");
     // last 3 still improving (span 0.2 > 0.02) -> keep going
     expect(evaluateVerdict(eo, [0.4, 0.6, 0.8], verdict({ recommendation: "retry" }))).toBeNull();
     // not enough samples yet -> keep going

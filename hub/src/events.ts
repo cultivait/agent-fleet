@@ -24,7 +24,15 @@ export type HubEvent =
   // wakes NO agent (deliverMessage is never called for SSE), so DMs stay invisible to
   // every agent but the recipient (who gets it via their own queue). The cockpit folds
   // it into the operator-only Direct Messages pane, keyed by the canonical pair.
-  | { type: "dm"; from: string; to: string; pair: string; content: string; timestamp: number; image?: { data: string; mimeType: string } }
+  | {
+      type: "dm";
+      from: string;
+      to: string;
+      pair: string;
+      content: string;
+      timestamp: number;
+      image?: { data: string; mimeType: string };
+    }
   | { type: "status"; name: string; online: boolean; timestamp: number }
   | { type: "typing"; name: string; channel: string; timestamp: number }
   | { type: "read_update"; userName: string; channel: string; timestamp: number }

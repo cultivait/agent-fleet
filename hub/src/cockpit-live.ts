@@ -11,7 +11,10 @@
 // stale is computed server-side using the same PRESENCE_GRACE_MS threshold as
 // the ghost-reaper, so cockpit and reaper agree on what "stale" means.
 
-export interface TodoItem { content: string; status: string; }
+export interface TodoItem {
+  content: string;
+  status: string;
+}
 
 export interface RawBoardEntry {
   name: string;

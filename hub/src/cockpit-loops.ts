@@ -84,7 +84,7 @@ export function loopFmtInt(n: number): string {
 
 // h:mm:ss / m:ss elapsed/budget label.
 export function loopFmtDuration(ms: number): string {
-  let t = ms < 0 ? 0 : ms;
+  const t = ms < 0 ? 0 : ms;
   const totalSec = Math.floor(t / 1000);
   const sec = totalSec % 60;
   const totalMin = Math.floor(totalSec / 60);
@@ -120,10 +120,7 @@ export function buildLoopView(loop: LoopRow, now: number): LoopView {
   const tokens: LoopGauge = {
     ratio: tokRatio,
     shown: cfg.token_budget != null,
-    label:
-      cfg.token_budget != null
-        ? loopFmtInt(tokN) + " / " + loopFmtInt(cfg.token_budget)
-        : loopFmtInt(tokN),
+    label: cfg.token_budget != null ? loopFmtInt(tokN) + " / " + loopFmtInt(cfg.token_budget) : loopFmtInt(tokN),
   };
   const time: LoopGauge = {
     ratio: timeRatio,
@@ -143,9 +140,7 @@ export function buildLoopView(loop: LoopRow, now: number): LoopView {
       lc != null
         ? Math.round(lc * 100) +
           "%" +
-          (cfg.completeness_threshold != null
-            ? " / " + Math.round(cfg.completeness_threshold * 100) + "%"
-            : "")
+          (cfg.completeness_threshold != null ? " / " + Math.round(cfg.completeness_threshold * 100) + "%" : "")
         : "—",
   };
 

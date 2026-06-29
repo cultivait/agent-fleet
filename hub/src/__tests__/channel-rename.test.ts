@@ -1,11 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  getChannelMembers,
-  initGeneralChannel,
-  joinChannel,
-  renameChannel,
-  resetChannelState,
-} from "../channels.js";
+import { getChannelMembers, initGeneralChannel, joinChannel, renameChannel, resetChannelState } from "../channels.js";
 import {
   dbCreateChannel,
   dbGetChannel,

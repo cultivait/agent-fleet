@@ -1,5 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createProject, createTask, dbIndexExists, getTask, getTaskEvents, logEvent, planTransaction, setRollupSignaled, setTaskStatus } from "../plan/store.js";
+import {
+  createProject,
+  createTask,
+  dbIndexExists,
+  getTask,
+  getTaskEvents,
+  logEvent,
+  planTransaction,
+  setRollupSignaled,
+  setTaskStatus,
+} from "../plan/store.js";
 import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;

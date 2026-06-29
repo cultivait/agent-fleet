@@ -76,7 +76,21 @@ describe("createMcpServer tool registration (alias-transition)", () => {
   it("each radio_* alias shares the exact handler of its fleet_* canonical", () => {
     // Representative sample: a plain tool, plus each of the three alias-pair
     // seconds (over/wait/out) that share a primary's handler.
-    const sample = ["join", "send", "over", "standby", "wait", "disconnect", "out", "task_claim", "lock_acquire", "claim_referee", "loop_create", "loop_tick", "loop_verdict"];
+    const sample = [
+      "join",
+      "send",
+      "over",
+      "standby",
+      "wait",
+      "disconnect",
+      "out",
+      "task_claim",
+      "lock_acquire",
+      "claim_referee",
+      "loop_create",
+      "loop_tick",
+      "loop_verdict",
+    ];
     for (const verb of sample) {
       expect(reg[`radio_${verb}`].callback, `radio_${verb} handler mismatch`).toBe(reg[`fleet_${verb}`].callback);
     }

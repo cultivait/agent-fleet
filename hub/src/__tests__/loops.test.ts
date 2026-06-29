@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getPendingApprovalForLoop } from "../loops/approvals.js";
 import {
   createLoop,
   evaluateStopConditions,
   getLoop,
-  listLoops,
   type LoopConfig,
   type LoopState,
+  listLoops,
   openApproval,
   pauseLoop,
   resumeLoop,
@@ -13,7 +14,6 @@ import {
   tickLoop,
   type Verdict,
 } from "../loops/store.js";
-import { getPendingApprovalForLoop } from "../loops/approvals.js";
 import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 const ESCALATE: Verdict = {
@@ -87,13 +87,9 @@ describe("evaluateStopConditions (pure) — each condition fires", () => {
   it("repetition fires when the last `window` signatures are all identical", () => {
     const cfg: LoopConfig = { repetition: { window: 3 } };
     // mixed tail → no trip
-    expect(
-      evaluateStopConditions(cfg, state({ signatures: ["a", "b", "a", "b"] }), T0, T0),
-    ).toBeNull();
+    expect(evaluateStopConditions(cfg, state({ signatures: ["a", "b", "a", "b"] }), T0, T0)).toBeNull();
     // 3 identical in a row → trip
-    expect(
-      evaluateStopConditions(cfg, state({ signatures: ["x", "a", "a", "a"] }), T0, T0),
-    ).toBe("repetition");
+    expect(evaluateStopConditions(cfg, state({ signatures: ["x", "a", "a", "a"] }), T0, T0)).toBe("repetition");
     // not enough samples yet → no trip
     expect(evaluateStopConditions(cfg, state({ signatures: ["a", "a"] }), T0, T0)).toBeNull();
   });
@@ -101,13 +97,11 @@ describe("evaluateStopConditions (pure) — each condition fires", () => {
   it("diminishing_returns fires when the last `window` improvements are all below min", () => {
     const cfg: LoopConfig = { diminishing_returns: { window: 3, min_improvement: 0.05 } };
     // last 3 not all below → no trip
-    expect(
-      evaluateStopConditions(cfg, state({ improvements: [0.01, 0.2, 0.01, 0.01] }), T0, T0),
-    ).toBeNull();
+    expect(evaluateStopConditions(cfg, state({ improvements: [0.01, 0.2, 0.01, 0.01] }), T0, T0)).toBeNull();
     // last 3 all below → trip
-    expect(
-      evaluateStopConditions(cfg, state({ improvements: [0.2, 0.04, 0.01, 0.0] }), T0, T0),
-    ).toBe("diminishing_returns");
+    expect(evaluateStopConditions(cfg, state({ improvements: [0.2, 0.04, 0.01, 0.0] }), T0, T0)).toBe(
+      "diminishing_returns",
+    );
     // not enough samples → no trip
     expect(evaluateStopConditions(cfg, state({ improvements: [0.0, 0.0] }), T0, T0)).toBeNull();
   });
@@ -133,9 +127,7 @@ describe("evaluateStopConditions — OR semantics, first-trip-wins priority", ()
   it("any single condition trips independently (OR, not AND)", () => {
     const cfg: LoopConfig = { max_iterations: 3, token_budget: 1000, wall_clock_timeout_ms: 5000 };
     // only the timeout is exceeded
-    expect(evaluateStopConditions(cfg, state({ iterations: 1, tokens: 1 }), T0 + 6000, T0)).toBe(
-      "wall_clock_timeout",
-    );
+    expect(evaluateStopConditions(cfg, state({ iterations: 1, tokens: 1 }), T0 + 6000, T0)).toBe("wall_clock_timeout");
   });
 });
 

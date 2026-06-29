@@ -10,8 +10,9 @@
 // MAX_REFLECTION_CHARS, and only the most recent MAX_REFLECTIONS_PER_LOOP rows per loop
 // are retained (older ones are pruned in the same transaction as the insert). The DB
 // footprint per loop is therefore O(cap), never O(iterations).
-import type Database from "better-sqlite3";
+
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 
 export interface ReflectionRow {
   id: string;
@@ -101,7 +102,5 @@ export function listReflections(loopId: string, limit = MAX_REFLECTIONS_PER_LOOP
 }
 
 export function countReflections(loopId: string): number {
-  return (
-    db.prepare("SELECT COUNT(*) AS n FROM loop_reflections WHERE loop_id = ?").get(loopId) as { n: number }
-  ).n;
+  return (db.prepare("SELECT COUNT(*) AS n FROM loop_reflections WHERE loop_id = ?").get(loopId) as { n: number }).n;
 }

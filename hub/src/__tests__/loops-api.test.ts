@@ -1,10 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  registerUser,
-  startTestServer,
-  stopTestServer,
-  type TestContext,
-} from "./helpers/server-harness.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
 let aliceToken: string;
@@ -45,7 +40,11 @@ describe("loop API — auth + ownership", () => {
   });
 
   it("creates a loop owned by the authenticated caller", async () => {
-    const res = await post("/loop-create", { kind: "generic", label: "owned", config: { max_iterations: 5 } }, aliceToken);
+    const res = await post(
+      "/loop-create",
+      { kind: "generic", label: "owned", config: { max_iterations: 5 } },
+      aliceToken,
+    );
     expect(res.status).toBe(200);
     const { loop } = (await res.json()) as {
       loop: { id: string; owner_callsign: string; status: string };
@@ -78,9 +77,7 @@ describe("loop API — auth + ownership", () => {
     // non-owner cannot stop; owner can
     expect((await post("/loop-stop", { id }, bobToken)).status).toBe(403);
     const stopped = await post("/loop-stop", { id, reason: "external_terminate" }, aliceToken);
-    expect(((await stopped.json()) as { loop: { status: string; stop_reason: string } }).loop.status).toBe(
-      "stopped",
-    );
+    expect(((await stopped.json()) as { loop: { status: string; stop_reason: string } }).loop.status).toBe("stopped");
   });
 
   it("enforces a stop-condition end-to-end via /loop-tick", async () => {

@@ -602,10 +602,7 @@ export class HubClient {
   // Each method returns the hub's JSON response verbatim to the caller.
   // ---------------------------------------------------------------------------
 
-  async planCreate(
-    joinToken: string,
-    body: { title: string; brief?: string; by?: string },
-  ): Promise<unknown> {
+  async planCreate(joinToken: string, body: { title: string; brief?: string; by?: string }): Promise<unknown> {
     const res = await this.request<unknown>({
       method: "POST",
       path: "/project-create",
@@ -832,10 +829,7 @@ export class HubClient {
     return res.data;
   }
 
-  async lockRelease(
-    joinToken: string,
-    body: { resource_key: string; owner_sid: string },
-  ): Promise<unknown> {
+  async lockRelease(joinToken: string, body: { resource_key: string; owner_sid: string }): Promise<unknown> {
     const res = await this.request<unknown>({ method: "POST", path: "/resource-lock-release", token: joinToken, body });
     if (res.status !== 200) {
       throw new Error((res.data as { error?: string }).error ?? "Lock release failed");

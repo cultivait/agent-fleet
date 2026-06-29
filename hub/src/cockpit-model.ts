@@ -25,9 +25,20 @@ export interface PlanTask {
   created_at: number;
   updated_at: number;
 }
-export interface PlanDep { task_id: string; blocks_on: string; }
-export interface ChildSummary { total: number; terminal: number; done: number; }
-export interface Presence { sid: string; name: string; online: boolean; }
+export interface PlanDep {
+  task_id: string;
+  blocks_on: string;
+}
+export interface ChildSummary {
+  total: number;
+  terminal: number;
+  done: number;
+}
+export interface Presence {
+  sid: string;
+  name: string;
+  online: boolean;
+}
 export interface PlanBoard {
   project: { id: string; title: string; status: string } | null;
   lanes: Record<string, PlanTask[]>;
@@ -42,9 +53,21 @@ export interface ModelTask extends PlanTask {
   blocksCount: number;
   childSummary: ChildSummary | null;
 }
-export interface InstanceEntry { sid: string; label: string; online: boolean; task: ModelTask; secondaryTasks: ModelTask[]; }
+export interface InstanceEntry {
+  sid: string;
+  label: string;
+  online: boolean;
+  task: ModelTask;
+  secondaryTasks: ModelTask[];
+}
 export type LaneGroup = "backlog" | "active" | "terminal";
-export interface LaneView { status: string; label: string; group: LaneGroup; tasks: ModelTask[]; count: number; }
+export interface LaneView {
+  status: string;
+  label: string;
+  group: LaneGroup;
+  tasks: ModelTask[];
+  count: number;
+}
 export interface CockpitModel {
   project: PlanBoard["project"];
   lanes: LaneView[];
@@ -100,8 +123,10 @@ export function buildCockpitModel(board: PlanBoard, presence: Presence[]): Cockp
   const deps = Array.isArray(board.deps) ? board.deps : [];
   for (const d of deps) {
     if (!d || typeof d.task_id !== "string" || typeof d.blocks_on !== "string") continue;
-    (blockedBy[d.task_id] ||= []).push(d.blocks_on);
-    (blocks[d.blocks_on] ||= []).push(d.task_id);
+    blockedBy[d.task_id] ||= [];
+    blockedBy[d.task_id].push(d.blocks_on);
+    blocks[d.blocks_on] ||= [];
+    blocks[d.blocks_on].push(d.task_id);
   }
 
   const childSummaries = board.childSummaries && typeof board.childSummaries === "object" ? board.childSummaries : {};
@@ -109,7 +134,7 @@ export function buildCockpitModel(board: PlanBoard, presence: Presence[]): Cockp
   const byId: Record<string, ModelTask> = {};
   const enrich = (t: PlanTask): ModelTask => {
     const p = t.owner_sid ? presenceBySid.get(t.owner_sid) : undefined;
-    const ownerLabel = p ? p.name : t.owner ?? (t.owner_sid ? t.owner_sid.slice(0, 6) : null);
+    const ownerLabel = p ? p.name : (t.owner ?? (t.owner_sid ? t.owner_sid.slice(0, 6) : null));
     const mt: ModelTask = {
       ...t,
       ownerLabel,
@@ -123,10 +148,7 @@ export function buildCockpitModel(board: PlanBoard, presence: Presence[]): Cockp
   };
 
   // Lanes in canonical order, then any unknown statuses the server sent, appended.
-  const orderedStatuses = [
-    ...Object.keys(STATUS_META),
-    ...Object.keys(board.lanes).filter((s) => !(s in STATUS_META)),
-  ];
+  const orderedStatuses = [...Object.keys(STATUS_META), ...Object.keys(board.lanes).filter((s) => !(s in STATUS_META))];
   const lanes: LaneView[] = orderedStatuses.map((status) => {
     const raw = Array.isArray(board.lanes[status]) ? board.lanes[status] : [];
     const tasks = raw
@@ -157,8 +179,7 @@ export function buildCockpitModel(board: PlanBoard, presence: Presence[]): Cockp
       continue;
     }
     const better =
-      (INSTANCE_PICK[t.status] ?? 9) - (INSTANCE_PICK[cur.status] ?? 9) ||
-      (cur.claimed_at ?? 0) - (t.claimed_at ?? 0); // tie-break: most recent claim wins (negative ⇒ replace cur)
+      (INSTANCE_PICK[t.status] ?? 9) - (INSTANCE_PICK[cur.status] ?? 9) || (cur.claimed_at ?? 0) - (t.claimed_at ?? 0); // tie-break: most recent claim wins (negative ⇒ replace cur)
     if (better < 0) byInstance.set(t.owner_sid, t);
   }
   // Include blocked-only instances (no in-flight primary task picked).

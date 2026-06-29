@@ -125,7 +125,10 @@ describe("persistent operator presence (Operator)", () => {
     expect(drain.drained).toBe(true);
     expect(drain.messages.some((m) => m.content === "inbox ping")).toBe(true);
 
-    const after = (await (await adminGet("/admin-operator-inbox")).json()) as { addressedCount: number; queuedCount: number };
+    const after = (await (await adminGet("/admin-operator-inbox")).json()) as {
+      addressedCount: number;
+      queuedCount: number;
+    };
     expect(after.addressedCount).toBe(0);
     expect(after.queuedCount).toBe(0);
   });

@@ -56,7 +56,10 @@ describe("direct messages (fleet_dm) — delivery + isolation", () => {
     expect(got?.dm, "received message is flagged as a DM so the client can distinguish it").toBe(true);
 
     const carolMsgs = await inbox(carol);
-    expect(carolMsgs.find((m) => m.content === "secret for bob only"), "third agent must NOT see the DM").toBeUndefined();
+    expect(
+      carolMsgs.find((m) => m.content === "secret for bob only"),
+      "third agent must NOT see the DM",
+    ).toBeUndefined();
   });
 
   it("never lets a DM enter any channel history (/admin-channel-history)", async () => {
@@ -85,12 +88,18 @@ describe("direct messages (fleet_dm) — operator audit store", () => {
     const pair = ["store-alice", "store-bob"].sort().join("|");
 
     const threads = (await (await adminGet("/admin-dms")).json()) as { threads: Array<{ pair: string }> };
-    expect(threads.threads.some((t) => t.pair === pair), "thread listed in /admin-dms").toBe(true);
+    expect(
+      threads.threads.some((t) => t.pair === pair),
+      "thread listed in /admin-dms",
+    ).toBe(true);
 
     const hist = (await (await adminGet(`/admin-dm-history?pair=${encodeURIComponent(pair)}`)).json()) as {
       messages: Msg[];
     };
-    expect(hist.messages.some((m) => m.content === "thread line one"), "DM readable in /admin-dm-history").toBe(true);
+    expect(
+      hist.messages.some((m) => m.content === "thread line one"),
+      "DM readable in /admin-dm-history",
+    ).toBe(true);
   });
 
   it("keys both directions onto the same thread (canonical sorted pair)", async () => {

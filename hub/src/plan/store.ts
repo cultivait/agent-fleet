@@ -10,8 +10,9 @@
 // synchronous execution — no await, no connection pool, no worker threads. A
 // multi-process fleet (e.g. a rolling deploy with two hub instances) must migrate
 // to Postgres with row-level locks before relaxing this invariant.
-import type Database from "better-sqlite3";
+
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 
 export interface ProjectRow {
   id: string;
@@ -283,7 +284,15 @@ export function logEvent(taskId: string, opts: LogEventOpts): void {
   db.prepare(
     `INSERT INTO task_event (task_id, ts, actor, kind, from_status, to_status, note)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(taskId, Date.now(), opts.actor ?? null, opts.kind, opts.fromStatus ?? null, opts.toStatus ?? null, opts.note ?? null);
+  ).run(
+    taskId,
+    Date.now(),
+    opts.actor ?? null,
+    opts.kind,
+    opts.fromStatus ?? null,
+    opts.toStatus ?? null,
+    opts.note ?? null,
+  );
 }
 
 export function getTaskEvents(taskId: string): TaskEventRow[] {
@@ -512,7 +521,9 @@ export function getDependents(taskId: string): string[] {
 // longest single tool/subagent run, or a slow-but-alive owner gets false-reclaimed
 // (residual N1; the ownerGate 403 on its return is the safety net).
 export function leaseMs(): number {
-  return (parseInt(process.env.AF_PLAN_LEASE_SECONDS ?? process.env.WT_PLAN_LEASE_SECONDS ?? "1800", 10) || 1800) * 1000;
+  return (
+    (parseInt(process.env.AF_PLAN_LEASE_SECONDS ?? process.env.WT_PLAN_LEASE_SECONDS ?? "1800", 10) || 1800) * 1000
+  );
 }
 
 // Atomic claim: flip ready→claimed in a SINGLE conditional UPDATE and stamp the
@@ -606,9 +617,7 @@ export function setTaskStatus(id: string, status: string, extra?: SetTaskStatusE
 
 // Test/diagnostic helper: verify an index exists by name in sqlite_master.
 export function dbIndexExists(indexName: string): boolean {
-  return (
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(indexName) !== undefined
-  );
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(indexName) !== undefined;
 }
 
 // D1: wrap any compound mutation (>1 write) in a single BEGIN/COMMIT block.

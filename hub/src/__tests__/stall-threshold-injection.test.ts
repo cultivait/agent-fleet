@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { STALL_BEAT_MS } from "../constants.js";
 import { cockpitScript } from "../cockpit-ui.js";
+import { STALL_BEAT_MS } from "../constants.js";
 import { getDashboardHTML } from "../dashboard.js";
 
 // Wave-4 (c): the C5 stall threshold now has ONE source of truth — constants.STALL_BEAT_MS.
@@ -16,15 +16,18 @@ describe("C5/Wave-4 (c) — stall threshold single source of truth", () => {
     expect(STALL_BEAT_MS).toBe(3_600_000);
   });
 
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal ${} in the test name documents the un-interpolated leak this test guards against
   it("cockpit-ui browser script injects the canonical value with no literal ${} leak", () => {
     const script = cockpitScript();
     expect(script).toContain(`var STALL_BEAT_MS = ${STALL_BEAT_MS};`);
     expect(script).not.toContain("${"); // no un-interpolated template expression survived
   });
 
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal ${STALL_BEAT_MS} in the test name documents the un-interpolated leak this test guards against
   it("dashboard HTML injects the canonical value with no literal ${STALL_BEAT_MS} leak", () => {
     const html = getDashboardHTML("test-admin-token");
     expect(html).toContain(`const STALL_BEAT_MS = ${STALL_BEAT_MS};`);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: asserting the shipped HTML contains NO un-interpolated ${STALL_BEAT_MS} — the literal is the assertion target
     expect(html).not.toContain("${STALL_BEAT_MS}");
   });
 });

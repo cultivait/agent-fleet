@@ -19,9 +19,18 @@
 // owns the merge-read (file > env > default) inside the conductor. The one A→B data
 // seam is conductor-state.json `lastEval` (read-only here, for status).
 
-import { spawn as realSpawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type WriteStream } from "node:fs";
+import { spawn as realSpawn } from "node:child_process";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  type WriteStream,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,22 +49,36 @@ function configDir(): string {
   return newDir;
 }
 function controlFile(): string {
-  return process.env.AF_CONDUCTOR_CONTROL_FILE || process.env.WT_CONDUCTOR_CONTROL_FILE || join(configDir(), "conductor-control.json");
+  return (
+    process.env.AF_CONDUCTOR_CONTROL_FILE ||
+    process.env.WT_CONDUCTOR_CONTROL_FILE ||
+    join(configDir(), "conductor-control.json")
+  );
 }
 function pidFile(): string {
   return process.env.AF_CONDUCTOR_PID_FILE || process.env.WT_CONDUCTOR_PID_FILE || join(configDir(), "conductor.pid");
 }
 function settingsFile(): string {
-  return process.env.AF_OPERATOR_SETTINGS_FILE || process.env.WT_OPERATOR_SETTINGS_FILE || join(configDir(), "operator-settings.json");
+  return (
+    process.env.AF_OPERATOR_SETTINGS_FILE ||
+    process.env.WT_OPERATOR_SETTINGS_FILE ||
+    join(configDir(), "operator-settings.json")
+  );
 }
 function stateFile(): string {
-  return process.env.AF_CONDUCTOR_STATE_FILE || process.env.WT_CONDUCTOR_STATE_FILE || join(configDir(), "conductor-state.json");
+  return (
+    process.env.AF_CONDUCTOR_STATE_FILE ||
+    process.env.WT_CONDUCTOR_STATE_FILE ||
+    join(configDir(), "conductor-state.json")
+  );
 }
 // F1(b): the referee LAUNCHER's stdout/stderr are teed here. Lives in the same state
 // dir operator-control already writes (alongside the conductor pidfile/state/settings) —
 // NOT a hardcoded /var/lib path. Env-overridable so tests redirect it to a temp dir.
 function refereeLaunchLogFile(): string {
-  return process.env.AF_REFEREE_LAUNCH_LOG || process.env.WT_REFEREE_LAUNCH_LOG || join(configDir(), "launch-referee.log");
+  return (
+    process.env.AF_REFEREE_LAUNCH_LOG || process.env.WT_REFEREE_LAUNCH_LOG || join(configDir(), "launch-referee.log")
+  );
 }
 
 // Repo root: this module compiles to <repo>/hub/dist/operator-control.js, so the repo
@@ -66,10 +89,16 @@ function repoRoot(): string {
   return resolve(here, "..", "..");
 }
 function fleetScript(): string {
-  return process.env.AF_FLEET_SCRIPT || process.env.WT_FLEET_SCRIPT || join(repoRoot(), "scripts", "fleet", "fleet.mjs");
+  return (
+    process.env.AF_FLEET_SCRIPT || process.env.WT_FLEET_SCRIPT || join(repoRoot(), "scripts", "fleet", "fleet.mjs")
+  );
 }
 function conductorScript(): string {
-  return process.env.AF_CONDUCTOR_SCRIPT || process.env.WT_CONDUCTOR_SCRIPT || join(repoRoot(), "scripts", "fleet", "conductor-executor.mjs");
+  return (
+    process.env.AF_CONDUCTOR_SCRIPT ||
+    process.env.WT_CONDUCTOR_SCRIPT ||
+    join(repoRoot(), "scripts", "fleet", "conductor-executor.mjs")
+  );
 }
 // The node binary used to run the .mjs orchestrators. Defaults to the hub's own node
 // (process.execPath); AF_FLEET_NODE lets ops pin a >=20 binary if the hub runs older.
@@ -358,7 +387,9 @@ function teeRefereeLaunchOutput(child: ChildProcess): void {
     const logPath = refereeLaunchLogFile();
     mkdirSync(dirname(logPath), { recursive: true });
     logStream = createWriteStream(logPath, { flags: "a" }); // append: launches accumulate
-    logStream.on("error", () => { /* disk full / perms — logging is best-effort, never crash the hub */ });
+    logStream.on("error", () => {
+      /* disk full / perms — logging is best-effort, never crash the hub */
+    });
     logStream.write(`\n[launch-referee ts=${nowStamp()}] pid=${child.pid}\n`);
   } catch {
     logStream = null;
@@ -379,8 +410,7 @@ function teeRefereeLaunchOutput(child: ChildProcess): void {
       const why = signal ? `signal ${signal}` : `exit ${code}`;
       const tail = stderrTail.trim();
       console.error(
-        `[operator-control] launch-referee child ${why}` +
-          (tail ? `; stderr tail:\n${tail}` : " (no stderr captured)"),
+        `[operator-control] launch-referee child ${why}` + (tail ? `; stderr tail:\n${tail}` : " (no stderr captured)"),
       );
     }
   });

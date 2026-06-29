@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  type ProcDeps,
   conductorStatus,
   launchBuilders,
   launchReferee,
+  type ProcDeps,
   readControlRaw,
   startConductor,
   stopConductor,
@@ -63,17 +63,27 @@ function fakeProc(opts: { pid?: number; alive?: number[]; cmdlineMatch?: boolean
   const deps: ProcDeps = {
     spawn: (cmd, args, o) => {
       spawns.push({ cmd, args, opts: o });
-      return { pid: opts.pid ?? 4242, unref: () => { unrefs++; }, on: () => undefined } as unknown as ChildProcess;
+      return {
+        pid: opts.pid ?? 4242,
+        unref: () => {
+          unrefs++;
+        },
+        on: () => undefined,
+      } as unknown as ChildProcess;
     },
     isAlive: (pid) => alive.has(pid),
-    signal: (pid, sig) => { signals.push({ pid, sig }); },
+    signal: (pid, sig) => {
+      signals.push({ pid, sig });
+    },
     cmdlineMatches: (pid) => cmdlineOk && alive.has(pid),
   };
   return {
     deps,
     spawns,
     signals,
-    get unrefs() { return unrefs; },
+    get unrefs() {
+      return unrefs;
+    },
   };
 }
 
@@ -211,7 +221,12 @@ describe("launchReferee", () => {
   // child object (Object.assign mutates it) — emit "close"/"error" on it, and on stdout/stderr.
   // NOTE: the tee ends the log on "close" (not "exit") so the final buffered stdout can't be
   // truncated mid-flush; tests drive "close" to match the production wiring.
-  function fakeChildWithStreams(pid = 7777): { child: ChildProcess; proc: EventEmitter; stdout: EventEmitter; stderr: EventEmitter } {
+  function fakeChildWithStreams(pid = 7777): {
+    child: ChildProcess;
+    proc: EventEmitter;
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+  } {
     const proc = new EventEmitter();
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();

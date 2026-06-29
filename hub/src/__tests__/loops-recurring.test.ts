@@ -1,12 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createLoop, getLoop, tickLoop } from "../loops/store.js";
 import { computeNextFire, fireDrift } from "../loops/schedule.js";
-import {
-  registerUser,
-  startTestServer,
-  stopTestServer,
-  type TestContext,
-} from "./helpers/server-harness.js";
+import { createLoop, getLoop, tickLoop } from "../loops/store.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
 let aliceToken: string;
@@ -131,11 +126,7 @@ describe("loop API — recurring create + tick + public /loops read", () => {
   }
 
   it("POST /loop-create with interval_ms persists the schedule and rejects a bad interval (400)", async () => {
-    const res = await post(
-      "/loop-create",
-      { kind: "generic", label: "api-rec", interval_ms: 30_000 },
-      aliceToken,
-    );
+    const res = await post("/loop-create", { kind: "generic", label: "api-rec", interval_ms: 30_000 }, aliceToken);
     expect(res.status).toBe(200);
     const { loop } = (await res.json()) as {
       loop: { id: string; interval_ms: number; anchor_ms: number; next_fire_ms: number; last_fire_ms: number | null };
@@ -156,7 +147,12 @@ describe("loop API — recurring create + tick + public /loops read", () => {
     );
     const { loop } = (await created.json()) as { loop: { id: string } };
     const tick = await post("/loop-tick", { id: loop.id }, aliceToken);
-    const r = (await tick.json()) as { continue: boolean; next_fire_ms: number; last_fire_ms: number; drift_ms: number };
+    const r = (await tick.json()) as {
+      continue: boolean;
+      next_fire_ms: number;
+      last_fire_ms: number;
+      drift_ms: number;
+    };
     expect(r.continue).toBe(true);
     expect(r.next_fire_ms).toBe(computeNextFire(PAST_ANCHOR, I, r.last_fire_ms));
     expect(typeof r.drift_ms).toBe("number");

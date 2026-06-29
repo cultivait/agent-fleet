@@ -12,8 +12,9 @@
 // tickLoop()'s transaction, so opening the queue item and pausing the loop commit
 // atomically. Opening is idempotent per loop (one open item at a time) so a racing or
 // repeated escalate tick can never fan out duplicate queue items.
-import type Database from "better-sqlite3";
+
 import { randomUUID } from "node:crypto";
+import type Database from "better-sqlite3";
 
 // Verdict comes from the canonical acyclic leaf (loops/verdict.ts), NOT store.ts — keeps the
 // dep graph acyclic: verdict.ts ← approvals.ts ← store.ts (store also imports verdict.ts).
@@ -198,8 +199,12 @@ export function resolveApproval(
   if (current.status !== "pending") {
     throw new Error(`Approval "${id}" already ${current.status}`);
   }
-  db.prepare(
-    "UPDATE loop_approvals SET status = ?, decided_at = ?, decided_by = ?, note = ? WHERE id = ?",
-  ).run(decision, Date.now(), decidedBy, note ?? null, id);
+  db.prepare("UPDATE loop_approvals SET status = ?, decided_at = ?, decided_by = ?, note = ? WHERE id = ?").run(
+    decision,
+    Date.now(),
+    decidedBy,
+    note ?? null,
+    id,
+  );
   return getApproval(id);
 }

@@ -15,9 +15,20 @@ export interface DagInputTask {
   priority: number;
   status: string;
 }
-export interface DagDep { task_id: string; blocks_on: string; }
-export interface DagNode { id: string; layer: number; order: number; flagged: boolean; }
-export interface DagLayout { nodes: DagNode[]; flaggedEdges: Array<{ from: string; to: string }>; }
+export interface DagDep {
+  task_id: string;
+  blocks_on: string;
+}
+export interface DagNode {
+  id: string;
+  layer: number;
+  order: number;
+  flagged: boolean;
+}
+export interface DagLayout {
+  nodes: DagNode[];
+  flaggedEdges: Array<{ from: string; to: string }>;
+}
 
 export function layoutDag(tasks: DagInputTask[], deps: DagDep[]): DagLayout {
   if (!Array.isArray(tasks) || tasks.length === 0) return { nodes: [], flaggedEdges: [] };
@@ -79,7 +90,9 @@ export function layoutDag(tasks: DagInputTask[], deps: DagDep[]): DagLayout {
       if (tx.priority !== ty.priority) return tx.priority - ty.priority;
       return x < y ? -1 : x > y ? 1 : 0;
     });
-    bucket.forEach((id, i) => order.set(id, i));
+    bucket.forEach((id, i) => {
+      order.set(id, i);
+    });
   }
 
   const nodes: DagNode[] = tasks.map((t) => ({

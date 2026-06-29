@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.11.1 (2026-06-28)
+
+### Fixes
+- **Lint gate hardening** — the CI lint step (Biome) now excludes build output and vendored browser assets, and all source-level lint findings are resolved, so `biome ci` runs as a strict gate instead of an advisory step. No runtime behavior changes.
+
 ## v1.11.0 (2026-06-28)
 
 ### Features

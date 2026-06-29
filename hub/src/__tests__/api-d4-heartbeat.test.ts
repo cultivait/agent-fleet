@@ -6,7 +6,7 @@
 // Sids with NO board entry are allowed through unchanged (backward compat / fail-open).
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { setLeaseExpiry, getTask } from "../plan/store.js";
+import { getTask, setLeaseExpiry } from "../plan/store.js";
 import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
@@ -142,9 +142,7 @@ describe("D4 — /plan-heartbeat liveness binding", () => {
     expect(((await hbRes.json()) as { renewed: number }).renewed).toBe(0);
 
     // Expired + not renewed → task should be reclaimed on the next inflight sweep.
-    const inflight = await (
-      await fetch(`${ctx.baseUrl}/plan-inflight`)
-    ).json() as { tasks: { id: string }[] };
+    const inflight = (await (await fetch(`${ctx.baseUrl}/plan-inflight`)).json()) as { tasks: { id: string }[] };
     expect(inflight.tasks.some((t) => t.id === taskId)).toBe(false);
   });
 });

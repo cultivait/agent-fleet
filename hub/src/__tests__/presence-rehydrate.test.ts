@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setPersistent } from "../auth.js";
 import { dbListRegistry, dbRegistryUpsert } from "../db.js";
 import { isOnline, reconcilePresenceFromRegistry, reconcileRejoinDuplicates, setOnline } from "../polling.js";
-import { deriveTmuxSession } from "../terminal.js";
 import { ensureOperatorPresence } from "../server.js";
+import { deriveTmuxSession } from "../terminal.js";
 import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 // FIX B3 — startup stale-seat sweep. `isOnline` defaults ONLINE for any callsign not in
@@ -34,7 +34,12 @@ describe("rehydratePresenceFromRegistry (startup stale-seat sweep)", () => {
     // operator. All read ONLINE by default before the sweep (offline set is empty).
     dbRegistryUpsert({ session_id: "ref-sess", spawn_id: "ref-spawn", callsign: "REFEREE", started_at: 3000 });
     dbRegistryUpsert({ session_id: "wt-sess", spawn_id: "wt-spawn", callsign: "wt-abc123", started_at: 2000 });
-    dbRegistryUpsert({ session_id: "operator-sess", spawn_id: "operator-spawn", callsign: "Operator", started_at: 1000 });
+    dbRegistryUpsert({
+      session_id: "operator-sess",
+      spawn_id: "operator-spawn",
+      callsign: "Operator",
+      started_at: 1000,
+    });
 
     expect(isOnline("REFEREE")).toBe(true); // pre-sweep: phantom online — the bug
     expect(isOnline("wt-abc123")).toBe(true);
@@ -186,7 +191,13 @@ describe("reconcileRejoinDuplicates (reconcile-on-rejoin)", () => {
   it("signs off a null-handle ghost when the rejoined row has a live tmux handle; leaves the live row", () => {
     // The freshly re-registered LIVE row (handle → live tmux) + the null-handle ghost the prior
     // (regenerated-sid) registration left behind, both under the same callsign.
-    dbRegistryUpsert({ session_id: "new-sess", spawn_id: "new-spawn", callsign: "wt-x", control_handle: "tmux:wt-new", started_at: 3000 });
+    dbRegistryUpsert({
+      session_id: "new-sess",
+      spawn_id: "new-spawn",
+      callsign: "wt-x",
+      control_handle: "tmux:wt-new",
+      started_at: 3000,
+    });
     dbRegistryUpsert({ session_id: "old-ghost", callsign: "wt-x", started_at: 1000 });
 
     const retired = reconcileRejoinDuplicates("wt-x", "new-sess", (s) => s === "wt-new");
@@ -198,7 +209,13 @@ describe("reconcileRejoinDuplicates (reconcile-on-rejoin)", () => {
   });
 
   it("never retires the just-written row, nor a non-null (dead) handle row; only null-handle ghosts", () => {
-    dbRegistryUpsert({ session_id: "keep", spawn_id: "keep-spawn", callsign: "wt-x", control_handle: "tmux:wt-live", started_at: 3000 });
+    dbRegistryUpsert({
+      session_id: "keep",
+      spawn_id: "keep-spawn",
+      callsign: "wt-x",
+      control_handle: "tmux:wt-live",
+      started_at: 3000,
+    });
     dbRegistryUpsert({ session_id: "dead-handle", callsign: "wt-x", control_handle: "tmux:wt-dead", started_at: 2000 });
     dbRegistryUpsert({ session_id: "ghost", callsign: "wt-x", started_at: 1000 });
 
@@ -223,7 +240,13 @@ describe("reconcileRejoinDuplicates (reconcile-on-rejoin)", () => {
   });
 
   it("no-op for a first-time registration (a single row for the callsign)", () => {
-    dbRegistryUpsert({ session_id: "solo", spawn_id: "solo-spawn", callsign: "wt-solo", control_handle: "tmux:wt-solo", started_at: 1000 });
+    dbRegistryUpsert({
+      session_id: "solo",
+      spawn_id: "solo-spawn",
+      callsign: "wt-solo",
+      control_handle: "tmux:wt-solo",
+      started_at: 1000,
+    });
 
     const retired = reconcileRejoinDuplicates("wt-solo", "solo", () => true);
 
@@ -248,7 +271,13 @@ describe("reconcileRejoinDuplicates (reconcile-on-rejoin)", () => {
     // Two independently-live rows — one via tmux: handle (wt-A), one via spawn_id only (wt-B) — plus a
     // dead ghost. The OLD code signed off ALL null-handle rows once any tmux: sibling was live → it
     // would have reaped the wt-B live row. The per-row liveness check spares it; only the dead ghost goes.
-    dbRegistryUpsert({ session_id: "tmux-live", spawn_id: "A", callsign: "wt-x", control_handle: "tmux:wt-A", started_at: 3000 });
+    dbRegistryUpsert({
+      session_id: "tmux-live",
+      spawn_id: "A",
+      callsign: "wt-x",
+      control_handle: "tmux:wt-A",
+      started_at: 3000,
+    });
     dbRegistryUpsert({ session_id: "sid-live", spawn_id: "B", callsign: "wt-x", started_at: 2000 }); // null handle, live via wt-B
     dbRegistryUpsert({ session_id: "ghost", callsign: "wt-x", started_at: 1000 }); // null handle, no spawn_id → dead
     const live = new Set(["wt-A", "wt-B"]);
@@ -265,13 +294,22 @@ describe("reconcileRejoinDuplicates (reconcile-on-rejoin)", () => {
 // deriveTmuxSession — the single derivation both the resolver and the reconcile sites route through.
 describe("deriveTmuxSession (canonical row→tmux-session derivation)", () => {
   it("strips an explicit tmux: control_handle", () => {
-    expect(deriveTmuxSession({ session_id: "s", callsign: "c", control_handle: "tmux:wt-abc" } as never)).toBe("wt-abc");
+    expect(deriveTmuxSession({ session_id: "s", callsign: "c", control_handle: "tmux:wt-abc" } as never)).toBe(
+      "wt-abc",
+    );
   });
   it("derives wt-<spawn_id> when there is no tmux: handle", () => {
     expect(deriveTmuxSession({ session_id: "s", callsign: "c", spawn_id: "abc" } as never)).toBe("wt-abc");
   });
   it("prefers the tmux: handle over the spawn_id derivation", () => {
-    expect(deriveTmuxSession({ session_id: "s", callsign: "c", control_handle: "tmux:wt-handle", spawn_id: "spawn" } as never)).toBe("wt-handle");
+    expect(
+      deriveTmuxSession({
+        session_id: "s",
+        callsign: "c",
+        control_handle: "tmux:wt-handle",
+        spawn_id: "spawn",
+      } as never),
+    ).toBe("wt-handle");
   });
   it("returns null for an empty tmux: handle and no spawn_id, and for a non-tmux handle with no spawn_id", () => {
     expect(deriveTmuxSession({ session_id: "s", callsign: "c", control_handle: "tmux:" } as never)).toBe(null);

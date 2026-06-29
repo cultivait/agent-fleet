@@ -37,55 +37,96 @@ import { STALL_BEAT_MS } from "./constants.js";
 import { getDashboardHTML } from "./dashboard.js";
 import {
   type BoardRow,
-  type ResourceLockRow,
   dbAcquireResourceLock,
+  dbConsumeRefereeSpec,
   dbCreateAgentConfig,
   dbCreateChannel,
+  dbCreateRefereeSpec,
   dbDeleteAgentConfig,
   dbDeleteBoardEntry,
   dbDeleteChannel,
   dbDeleteChannelMessages,
   dbDeletePendingAck,
   dbDeleteReadCursorsForChannel,
-  dbRenameChannel,
+  dbDeleteRegistryRow,
   dbGetAgentConfig,
   dbGetBoardEntry,
   dbGetChannel,
   dbGetChannelMessages,
-  dbConsumeRefereeSpec,
-  dbCreateRefereeSpec,
   dbGetChannelMessagesBefore,
   dbGetDmHistory,
-  dbListDmThreads,
-  dmPair,
   dbGetPendingAck,
   dbGetRecentMessages,
   dbGetRegistryCallsign,
   dbGetResourceLock,
   dbGetUnreadCounts,
+  dbGetUnreadMessagesTo,
   dbGetUserChannels,
+  dbInsertLog,
   dbListAgentConfigs,
-  dbDeleteRegistryRow,
   dbListBoard,
   dbListChannels,
-  dbListRegistry,
-  dbInsertLog,
-  dbListLog,
+  dbListDmThreads,
   dbListLatestLogPerAgent,
+  dbListLog,
   dbListLogSince,
+  dbListRegistry,
   dbPutBoardEntry,
   dbRegistryUpsert,
   dbReleaseResourceLock,
+  dbRenameChannel,
   dbRenewResourceLock,
   dbSetRegistryStatusBySession,
   dbSetRegistryStatusBySpawn,
   dbStampRegistryCallsign,
   dbUpdateAgentConfig,
   dbUpdateReadCursor,
-  dbGetUnreadMessagesTo,
+  dmPair,
+  type ResourceLockRow,
 } from "./db.js";
 import { addSSEClient, broadcast } from "./events.js";
 import { launchAgent } from "./launcher.js";
+import {
+  type ApprovalStatus,
+  getApproval,
+  getPendingApprovalForLoop,
+  listApprovals,
+  openCriteriaGate,
+  resolveApproval,
+} from "./loops/approvals.js";
+import { addReflection, listReflections } from "./loops/reflexion.js";
+import { summarizeLoopSchedule } from "./loops/schedule.js";
+import {
+  type AcceptanceCriteria,
+  applyAcceptanceCriteria,
+  bindLoopToReferee,
+  createDraftLoop,
+  createLoop,
+  getLoop,
+  type LoopConfig,
+  type LoopStatus,
+  listLoops,
+  pauseLoop,
+  resumeLoop,
+  revertLoopToDraft,
+  type StopReason,
+  setLoopProject,
+  stopLoop,
+  submitVerdict,
+  tickLoop,
+  type Verdict,
+} from "./loops/store.js";
+import {
+  conductorStatus,
+  launchBuilders,
+  launchReferee,
+  startConductor,
+  stopConductor,
+  validateConductorConfig,
+  validateFleetMax,
+  writeControlMerged,
+  writeFleetMax,
+} from "./operator-control.js";
 import {
   claimTask,
   demoteIfBlocked,
@@ -95,8 +136,8 @@ import {
   isTerminal,
   listReadyTasks,
   reclaimExpiredLeases,
-  setOnTaskReadyHook,
   STATUS_ORDER,
+  setOnTaskReadyHook,
   transitionTask,
   unblockOnAck,
   wedgedTasks,
@@ -115,43 +156,13 @@ import {
   getProject,
   getRecentEvents,
   getTask,
-  leaseMs as planLeaseMs,
   listDepsByProject,
   listInflightTasks,
   listProjects,
   listTasksByOwnerSid,
   listTasksByProject,
+  leaseMs as planLeaseMs,
 } from "./plan/store.js";
-import {
-  type AcceptanceCriteria,
-  applyAcceptanceCriteria,
-  bindLoopToReferee,
-  createDraftLoop,
-  createLoop,
-  getLoop,
-  listLoops,
-  pauseLoop,
-  resumeLoop,
-  revertLoopToDraft,
-  setLoopProject,
-  stopLoop,
-  submitVerdict,
-  tickLoop,
-  type LoopConfig,
-  type LoopStatus,
-  type StopReason,
-  type Verdict,
-} from "./loops/store.js";
-import { summarizeLoopSchedule } from "./loops/schedule.js";
-import { addReflection, listReflections } from "./loops/reflexion.js";
-import {
-  getApproval,
-  getPendingApprovalForLoop,
-  listApprovals,
-  openCriteriaGate,
-  resolveApproval,
-  type ApprovalStatus,
-} from "./loops/approvals.js";
 import {
   addPoll,
   clearLastSeen,
@@ -165,7 +176,17 @@ import {
   setOnline,
   touchLastSeen,
 } from "./polling.js";
-import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, peekQueue, pendingCounts, removeQueue, routeMessage, sendDm } from "./router.js";
+import {
+  drainQueue,
+  enqueueAndDeliver,
+  ensureQueue,
+  notifyBridges,
+  peekQueue,
+  pendingCounts,
+  removeQueue,
+  routeMessage,
+  sendDm,
+} from "./router.js";
 import {
   compactAgent,
   consumeTerminalTicket,
@@ -175,17 +196,6 @@ import {
   ticketFromUpgrade,
 } from "./terminal.js";
 import type { MessageImage, RegisterRequest, RegistryEntry, RouteHandler, SendRequest, UserRole } from "./types.js";
-import {
-  conductorStatus,
-  launchBuilders,
-  launchReferee,
-  startConductor,
-  stopConductor,
-  validateConductorConfig,
-  validateFleetMax,
-  writeControlMerged,
-  writeFleetMax,
-} from "./operator-control.js";
 
 const AGENT_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -1499,7 +1509,8 @@ export function assertLeaseReapInvariant(planLeaseMs: number, boardReapMs: numbe
 // false-reaped (upstream general default is 2400s/40min). It outlasts the rewake
 // window and gives long subagents headroom; a true ghost still clears within it.
 // Keep AF_PRESENCE_GRACE_SECONDS > AF_REWAKE_MAX_SECS.
-const PRESENCE_GRACE_MS = parseInt(process.env.AF_PRESENCE_GRACE_SECONDS ?? process.env.WT_PRESENCE_GRACE_SECONDS ?? "7200", 10) * 1000;
+const PRESENCE_GRACE_MS =
+  parseInt(process.env.AF_PRESENCE_GRACE_SECONDS ?? process.env.WT_PRESENCE_GRACE_SECONDS ?? "7200", 10) * 1000;
 
 function retireBoardEntry(name: string): void {
   const row = dbGetBoardEntry(name);
@@ -1855,7 +1866,8 @@ function computeChildSummaries(tasks: TaskRow[]): Record<string, { total: number
   const summaries: Record<string, { total: number; terminal: number; done: number }> = {};
   for (const t of tasks) {
     if (!t.parent_id) continue;
-    const s = (summaries[t.parent_id] ??= { total: 0, terminal: 0, done: 0 });
+    summaries[t.parent_id] ??= { total: 0, terminal: 0, done: 0 };
+    const s = summaries[t.parent_id];
     s.total += 1;
     if (isTerminal(t.status)) s.terminal += 1;
     if (t.status === "done") s.done += 1;
@@ -1921,7 +1933,10 @@ const handlePlanBoard: RouteHandler = async (req, res) => {
   const tasks = listTasksByProject(projectId);
   const lanes: Record<string, TaskRow[]> = {};
   for (const status of STATUS_ORDER) lanes[status] = [];
-  for (const t of tasks) (lanes[t.status] ??= []).push(t);
+  for (const t of tasks) {
+    lanes[t.status] ??= [];
+    lanes[t.status].push(t);
+  }
   sendJson(res, 200, {
     project,
     lanes,
@@ -2121,8 +2136,7 @@ const handlePlanInflight: RouteHandler = async (_req, res) => {
     const lastSeenAt = name ? getLastSeen(name) : 0;
     // Beat age only meaningful for a lease-governed task with a known, still-valid lease.
     const leaseValid = t.lease_expires_at != null && t.lease_expires_at - now > 0;
-    const lastBeatAgeMs =
-      governed && leaseValid && lastSeenAt > 0 ? Math.max(0, now - lastSeenAt) : null;
+    const lastBeatAgeMs = governed && leaseValid && lastSeenAt > 0 ? Math.max(0, now - lastSeenAt) : null;
     const stalled = lastBeatAgeMs != null && lastBeatAgeMs > STALL_BEAT_MS;
     return {
       id: t.id,
@@ -2179,9 +2193,7 @@ const handlePlanHeartbeat: RouteHandler = async (req, res) => {
   // whose tasks should be reclaimed, not refreshed.
   const boundEntry = dbListBoard().find((b) => b.sid === body.owner_sid);
   if (boundEntry && !isUserRegistered(boundEntry.name)) {
-    console.log(
-      `[plan-heartbeat] D4: skip renewal — sid ${body.owner_sid} bound to unregistered "${boundEntry.name}"`,
-    );
+    console.log(`[plan-heartbeat] D4: skip renewal — sid ${body.owner_sid} bound to unregistered "${boundEntry.name}"`);
     return sendJson(res, 200, { ok: true, renewed: 0, skipped: true });
   }
   const renewed = heartbeatByOwnerSid(body.owner_sid);
@@ -2205,7 +2217,11 @@ const handleTaskArtifact: RouteHandler = async (req, res) => {
   if (!body.uri || typeof body.uri !== "string") {
     return sendError(res, 400, "Missing or invalid 'uri' field");
   }
-  const task = addArtifact(body.task_id, { kind: body.kind, uri: body.uri, note: body.note ?? null }, body.actor ?? null);
+  const task = addArtifact(
+    body.task_id,
+    { kind: body.kind, uri: body.uri, note: body.note ?? null },
+    body.actor ?? null,
+  );
   if (!task) {
     return sendError(res, 404, `Task "${body.task_id}" not found`);
   }
@@ -2317,7 +2333,11 @@ const handleTaskTransition: RouteHandler = async (req, res) => {
 // chips render unchanged. Any other status is intentionally a no-op.
 const AUTO_LOG_KIND_BY_STATUS: Record<string, string> = { done: "done", blocked: "blocker" };
 
-function maybeAutoSeedTaskLog(task: { id: string; title: string; status: string; owner: string | null }, actor: string | null, note: string | null): void {
+function maybeAutoSeedTaskLog(
+  task: { id: string; title: string; status: string; owner: string | null },
+  actor: string | null,
+  note: string | null,
+): void {
   const kind = AUTO_LOG_KIND_BY_STATUS[task.status];
   if (!kind) return;
   // Attribute to the task OWNER (whose work it is), not the transition actor: a
@@ -2350,7 +2370,11 @@ const RESOURCE_LOCK_DEFAULT_LEASE_MS = 5 * 60 * 1000;
 // arbitrary TTL with nothing to free it. Cap it. Same invariant family as (b)'s
 // plan-lease<board-reap guard: NO LEASE OUTLIVES ITS RECLAIM WINDOW. Default ceiling is
 // the board-reap horizon (1h); tune via AF_RESOURCE_LOCK_MAX_LEASE_SECONDS.
-const RESOURCE_LOCK_MAX_LEASE_MS = parseInt(process.env.AF_RESOURCE_LOCK_MAX_LEASE_SECONDS ?? process.env.WT_RESOURCE_LOCK_MAX_LEASE_SECONDS ?? "3600", 10) * 1000;
+const RESOURCE_LOCK_MAX_LEASE_MS =
+  parseInt(
+    process.env.AF_RESOURCE_LOCK_MAX_LEASE_SECONDS ?? process.env.WT_RESOURCE_LOCK_MAX_LEASE_SECONDS ?? "3600",
+    10,
+  ) * 1000;
 
 // Resolve the effective lease for acquire/renew: honor a positive caller lease_ms,
 // clamp it down to the sane maximum, and fall back to the default when absent/invalid.
@@ -2376,7 +2400,11 @@ const handleResourceLockAcquire: RouteHandler = async (req, res) => {
   const acquired = dbAcquireResourceLock(body.resource_key, body.owner_sid, now + leaseMs, now);
   if (!acquired) {
     const existing = dbGetResourceLock(body.resource_key);
-    return sendError(res, 409, `Resource '${body.resource_key}' is locked by another session (expires ${existing?.lease_expires_at ?? "?"})`);
+    return sendError(
+      res,
+      409,
+      `Resource '${body.resource_key}' is locked by another session (expires ${existing?.lease_expires_at ?? "?"})`,
+    );
   }
   const lock = dbGetResourceLock(body.resource_key) as ResourceLockRow;
   sendJson(res, 200, { lock });
@@ -2466,7 +2494,7 @@ const handleLoopCreate: RouteHandler = async (req, res, userName) => {
   if (!body.label || typeof body.label !== "string") {
     return sendError(res, 400, "Missing or invalid 'label' field");
   }
-  let loop;
+  let loop!: ReturnType<typeof createLoop>;
   try {
     loop = createLoop({
       kind: body.kind,
@@ -2711,7 +2739,13 @@ const handleLoopBind: RouteHandler = async (req, res, userName) => {
       bound = applyAcceptanceCriteria(body.id, body.criteria);
     } else {
       const appr = openCriteriaGate(body.id, body.criteria);
-      broadcast({ type: "loop_approval", loop_id: body.id, approval_id: appr.id, status: "pending", timestamp: Date.now() });
+      broadcast({
+        type: "loop_approval",
+        loop_id: body.id,
+        approval_id: appr.id,
+        status: "pending",
+        timestamp: Date.now(),
+      });
     }
     sendJson(res, 200, { loop: bound });
   } catch (e) {
@@ -2743,10 +2777,8 @@ async function handleLoopAdminOp(
   sendJson(res, 200, { loop: action(body.id) });
 }
 
-const handleLoopAdminPause: RouteHandler = (req, res) =>
-  handleLoopAdminOp(req, res, (id) => pauseLoop(id));
-const handleLoopAdminResume: RouteHandler = (req, res) =>
-  handleLoopAdminOp(req, res, (id) => resumeLoop(id));
+const handleLoopAdminPause: RouteHandler = (req, res) => handleLoopAdminOp(req, res, (id) => pauseLoop(id));
+const handleLoopAdminResume: RouteHandler = (req, res) => handleLoopAdminOp(req, res, (id) => resumeLoop(id));
 
 // ── HITL approval queue (Phase 5) — operator-gated, mirrors the REFEREE/admin gate ──
 // List approvals (default: only pending — the live work queue). Optional ?status= and
@@ -2793,7 +2825,7 @@ const handleLoopApprovalResolve: RouteHandler = async (req, res) => {
   //   criteria_gate (item 2): approve → apply the (optionally operator-edited) criteria and
   //     run; reject-and-regenerate → send the loop back to draft for the Referee to re-propose.
   //   escalation_gate (existing): approve → resume; reject → terminate.
-  let loop;
+  let loop!: ReturnType<typeof resumeLoop>;
   try {
     if (approval.kind === "criteria_gate") {
       if (body.decision === "approve") {
@@ -2810,9 +2842,7 @@ const handleLoopApprovalResolve: RouteHandler = async (req, res) => {
       }
     } else {
       loop =
-        body.decision === "approve"
-          ? resumeLoop(approval.loop_id)
-          : stopLoop(approval.loop_id, "external_terminate");
+        body.decision === "approve" ? resumeLoop(approval.loop_id) : stopLoop(approval.loop_id, "external_terminate");
     }
   } catch (e) {
     return sendError(res, 409, (e as Error).message);
@@ -2903,11 +2933,7 @@ const handleAdminCompactAgent: RouteHandler = async (req, res) => {
     return sendError(res, 400, "Invalid JSON body");
   }
   const callsign =
-    typeof body.callsign === "string"
-      ? body.callsign.trim()
-      : typeof body.name === "string"
-        ? body.name.trim()
-        : "";
+    typeof body.callsign === "string" ? body.callsign.trim() : typeof body.name === "string" ? body.name.trim() : "";
   if (!callsign) return sendError(res, 400, "callsign is required");
   const session = await compactAgent(callsign);
   if (!session) {
@@ -3215,7 +3241,10 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
 
     function flushWorkStealNotification(): void {
       flushScheduled = false;
-      if (process.env.WORK_STEAL_NOTIFY === "false") { pendingReadyTasks.length = 0; return; }
+      if (process.env.WORK_STEAL_NOTIFY === "false") {
+        pendingReadyTasks.length = 0;
+        return;
+      }
       const batch = pendingReadyTasks.splice(0);
       if (batch.length === 0) return;
 
@@ -3233,10 +3262,7 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
       const ids = batch.map((t) => t.taskId).join(", ");
       const noun = batch.length === 1 ? "task" : "tasks";
       try {
-        routeMessage("system", `@${target}`,
-          `[work-steal] ${batch.length} ${noun} now ready: ${ids}`,
-          "#all",
-        );
+        routeMessage("system", `@${target}`, `[work-steal] ${batch.length} ${noun} now ready: ${ids}`, "#all");
       } catch {
         // target may have disconnected between hook fire and flush — safe to ignore
       }
@@ -3292,38 +3318,42 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     // 403. The decision is async (JWT verify may hit the JWKS), so it runs in a
     // promise and the dispatcher returns immediately.
     if (path === "/" && req.method === "GET") {
-      void passesBrowserGate(req).then((ok) => {
-        if (!ok) {
+      void passesBrowserGate(req)
+        .then((ok) => {
+          if (!ok) {
+            sendError(res, 403, "Forbidden");
+            return;
+          }
+          // The dashboard HTML is regenerated per request (it embeds a fresh
+          // scoped cockpit token and ships the current build). Without no-store,
+          // browsers + the CF edge heuristically cache it and serve a STALE
+          // dashboard — AND would pin a stale/expired cockpit token. Force
+          // revalidation so a new build + a fresh token are always picked up.
+          res.writeHead(200, {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+          });
+          // A3-a: embed a freshly-minted scoped cockpit token, NOT the raw admin
+          // token. The raw admin token never reaches the browser.
+          res.end(getDashboardHTML(mintCockpitToken()));
+        })
+        .catch(() => {
           sendError(res, 403, "Forbidden");
-          return;
-        }
-        // The dashboard HTML is regenerated per request (it embeds a fresh
-        // scoped cockpit token and ships the current build). Without no-store,
-        // browsers + the CF edge heuristically cache it and serve a STALE
-        // dashboard — AND would pin a stale/expired cockpit token. Force
-        // revalidation so a new build + a fresh token are always picked up.
-        res.writeHead(200, {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
         });
-        // A3-a: embed a freshly-minted scoped cockpit token, NOT the raw admin
-        // token. The raw admin token never reaches the browser.
-        res.end(getDashboardHTML(mintCockpitToken()));
-      }).catch(() => {
-        sendError(res, 403, "Forbidden");
-      });
       return;
     }
     if (path === "/events" && req.method === "GET") {
-      void passesBrowserGate(req).then((ok) => {
-        if (!ok) {
+      void passesBrowserGate(req)
+        .then((ok) => {
+          if (!ok) {
+            sendError(res, 403, "Forbidden");
+            return;
+          }
+          addSSEClient(res);
+        })
+        .catch(() => {
           sendError(res, 403, "Forbidden");
-          return;
-        }
-        addSSEClient(res);
-      }).catch(() => {
-        sendError(res, 403, "Forbidden");
-      });
+        });
       return;
     }
 
@@ -3443,12 +3473,14 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
   // WS1: registry liveness sweep — detect silently-dead sessions (crash/kill) that
   // no lifecycle verb retired and mark them crashed, so the conductor can requeue a
   // wedged task. Read-only probe (tmux has-session / kill -0); fires nothing itself.
-  const REGISTRY_SWEEP_MS = parseInt(process.env.AF_REGISTRY_SWEEP_SECONDS ?? process.env.WT_REGISTRY_SWEEP_SECONDS ?? "30", 10) * 1000;
+  const REGISTRY_SWEEP_MS =
+    parseInt(process.env.AF_REGISTRY_SWEEP_SECONDS ?? process.env.WT_REGISTRY_SWEEP_SECONDS ?? "30", 10) * 1000;
   // Grace before a dead/superseded registry row is hard-deleted by the GC. A freshly
   // crashed row lingers this long so the conductor can read its "crashed" status and
   // requeue, then it's pruned. Default 1h. Malformed rows (no started_at) ignore grace.
   const REGISTRY_REAP_GRACE_MS =
-    parseInt(process.env.AF_REGISTRY_REAP_GRACE_SECONDS ?? process.env.WT_REGISTRY_REAP_GRACE_SECONDS ?? "3600", 10) * 1000;
+    parseInt(process.env.AF_REGISTRY_REAP_GRACE_SECONDS ?? process.env.WT_REGISTRY_REAP_GRACE_SECONDS ?? "3600", 10) *
+    1000;
   setInterval(() => {
     reapCrashedSessions(!REAPING_DISABLED);
     // GC runs unconditionally (see reapDeadRegistryRows): it prunes only the dead ledger,

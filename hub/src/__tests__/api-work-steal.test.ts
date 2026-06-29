@@ -62,7 +62,7 @@ async function pendingCounts(): Promise<{ counts: Record<string, number>; queued
 
 describe("C2 work-steal auto-wake", () => {
   it("ratify→ready with an online agent sends a system message addressed to that agent", async () => {
-    const agentToken = await registerAgent("ws-agent-1");
+    const _agentToken = await registerAgent("ws-agent-1");
     const projectId = await makeProject();
     const taskId = await makeTask(projectId);
 
@@ -123,7 +123,7 @@ describe("C2 work-steal auto-wake", () => {
 
   it("WORK_STEAL_NOTIFY=false → no message sent", async () => {
     process.env.WORK_STEAL_NOTIFY = "false";
-    const agentToken = await registerAgent("ws-agent-3");
+    const _agentToken = await registerAgent("ws-agent-3");
     const projectId = await makeProject();
     const taskId = await makeTask(projectId);
 
@@ -139,7 +139,7 @@ describe("C2 work-steal auto-wake", () => {
 
   it("WORK_STEAL_DISPATCHER routes message to dispatcher over other online agents", async () => {
     const _agentToken = await registerAgent("ws-general");
-    const dispatcherToken = await registerAgent("ws-dispatcher");
+    const _dispatcherToken = await registerAgent("ws-dispatcher");
     process.env.WORK_STEAL_DISPATCHER = "ws-dispatcher";
 
     const projectId = await makeProject();

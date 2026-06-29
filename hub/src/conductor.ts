@@ -245,7 +245,9 @@ export function idleVerdict(
 
   const flatMin = Math.round((now - win[0].sampledAt) / 60_000);
   const bracketNote =
-    opts.bracketOpen == null ? " [bracket signal UNWIRED — flagged on (a) alone; held-reserve/foreground may appear here]" : "";
+    opts.bracketOpen == null
+      ? " [bracket signal UNWIRED — flagged on (a) alone; held-reserve/foreground may appear here]"
+      : "";
   return {
     verdict: "HEALTHY-IDLE",
     reason: `idle-candidate: context_ts flat ~${flatMin}m across ${win.length} samples; no open task${bracketNote}`,
@@ -381,11 +383,7 @@ export interface SpawnGate {
   capRemaining: number;
 }
 
-export function gateSpawn(
-  requested: number,
-  activeCount: number,
-  env: Envelope = DEFAULT_ENVELOPE,
-): SpawnGate {
+export function gateSpawn(requested: number, activeCount: number, env: Envelope = DEFAULT_ENVELOPE): SpawnGate {
   const capRemaining = Math.max(0, env.cap - activeCount);
   const allowed = Math.max(0, Math.min(requested, capRemaining));
   return { allowed, denied: Math.max(0, requested - allowed), capRemaining };

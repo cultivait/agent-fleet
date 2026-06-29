@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layoutDag, type DagInputTask, type DagDep } from "../cockpit-dag.js";
+import { type DagDep, type DagInputTask, layoutDag } from "../cockpit-dag.js";
 
 const t = (id: string, o: Partial<DagInputTask> = {}): DagInputTask => ({
   id,
@@ -42,7 +42,11 @@ describe("layoutDag — layering", () => {
 describe("layoutDag — intra-layer order", () => {
   it("orders within a layer by parent-group, then priority, then id (stable)", () => {
     const { nodes } = layoutDag(
-      [t("a2", { parent_id: "P1", priority: 2 }), t("b1", { parent_id: "P2", priority: 2 }), t("a1", { parent_id: "P1", priority: 2 })],
+      [
+        t("a2", { parent_id: "P1", priority: 2 }),
+        t("b1", { parent_id: "P2", priority: 2 }),
+        t("a1", { parent_id: "P1", priority: 2 }),
+      ],
       [],
     );
     // All layer 0. P1 group {a1,a2} adjacent (orders 0,1), P2 {b1} after.
@@ -58,7 +62,10 @@ describe("layoutDag — intra-layer order", () => {
 
   it("assigns a contiguous 0..n-1 order within each layer", () => {
     const { nodes } = layoutDag([t("a"), t("b"), t("c")], [dep("b", "a"), dep("c", "a")]);
-    const layer1 = nodes.filter((n) => n.layer === 1).map((n) => n.order).sort();
+    const layer1 = nodes
+      .filter((n) => n.layer === 1)
+      .map((n) => n.order)
+      .sort();
     expect(layer1).toEqual([0, 1]);
   });
 });

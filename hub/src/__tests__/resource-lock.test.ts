@@ -119,10 +119,7 @@ describe("C4 — resource_lock: HTTP endpoints", () => {
   });
 
   it("get returns the current lock row", async () => {
-    const res = await get(
-      `/resource-lock-get?resource_key=${encodeURIComponent("http:acquire-test")}`,
-      ctx.joinToken,
-    );
+    const res = await get(`/resource-lock-get?resource_key=${encodeURIComponent("http:acquire-test")}`, ctx.joinToken);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { lock: { owner_sid: string } | null };
     expect(body.lock?.owner_sid).toBe("http-sid-A");

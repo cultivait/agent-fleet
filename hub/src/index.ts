@@ -14,10 +14,7 @@ const port = parseInt(process.env.PORT ?? "9559", 10);
 const joinToken = process.env.AGENT_FLEET_JOIN_TOKEN ?? process.env.WALKIE_TALKIE_JOIN_TOKEN;
 const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
 if (!joinToken || !adminToken) {
-  const missing = [
-    !joinToken ? "AGENT_FLEET_JOIN_TOKEN" : null,
-    !adminToken ? "AGENT_FLEET_ADMIN_TOKEN" : null,
-  ]
+  const missing = [!joinToken ? "AGENT_FLEET_JOIN_TOKEN" : null, !adminToken ? "AGENT_FLEET_ADMIN_TOKEN" : null]
     .filter(Boolean)
     .join(", ");
   console.error(

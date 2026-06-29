@@ -90,7 +90,14 @@ describe("plan core — tasks", () => {
     );
     expect(res.status).toBe(200);
     const { task } = (await res.json()) as {
-      task: { id: string; status: string; title: string; priority: number; project_id: string; parent_id: string | null };
+      task: {
+        id: string;
+        status: string;
+        title: string;
+        priority: number;
+        project_id: string;
+        parent_id: string | null;
+      };
     };
     expect(task.id).toMatch(/^task_/);
     expect(task.status).toBe("proposed");
@@ -216,7 +223,11 @@ describe("plan core — deps & readiness", () => {
   it("accepts deps[] at /task-create time", async () => {
     const projectId = await newProject();
     const b = await newTask(projectId, "B");
-    const res = await post("/task-create", { project_id: projectId, title: "A", deps: [b], by: "alice" }, ctx.joinToken);
+    const res = await post(
+      "/task-create",
+      { project_id: projectId, title: "A", deps: [b], by: "alice" },
+      ctx.joinToken,
+    );
     expect(res.status).toBe(200);
     const a = ((await res.json()) as { task: { id: string } }).task.id;
     const plan = (await (await get(`/plan-get?project_id=${projectId}`)).json()) as {
@@ -521,7 +532,7 @@ describe("plan W4.1-a — GET /plan-wedged (operator surfacing)", () => {
   it("is public (no token) and returns a tasks array", async () => {
     const res = await get("/plan-wedged");
     expect(res.status).toBe(200);
-    expect(Array.isArray((await res.json() as Wedged).tasks)).toBe(true);
+    expect(Array.isArray(((await res.json()) as Wedged).tasks)).toBe(true);
   });
 
   it("surfaces a ratified task whose blocker failed, with the dead blocker + reason", async () => {
@@ -774,9 +785,7 @@ describe("plan step 2 — parent roll-up signal + auto-complete (W4.1-c)", () =>
     expect(getTaskEvents(parentId).filter((e) => e.kind === "rollup")).toHaveLength(1);
     expect(getTask(parentId)?.status).toBe("done"); // W4.1-c: hub auto-advances when all children done
     // exactly one auto-complete transition→done was logged on the parent (idempotent)
-    expect(
-      getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done"),
-    ).toHaveLength(1);
+    expect(getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done")).toHaveLength(1);
 
     expect((await summaries(projectId))[parentId]).toEqual({ total: 2, terminal: 2, done: 2 });
   });
@@ -792,9 +801,7 @@ describe("plan step 2 — parent roll-up signal + auto-complete (W4.1-c)", () =>
     expect(getTaskEvents(parentId).filter((e) => e.kind === "rollup")).toHaveLength(1);
     // …but the parent must NOT auto-complete — partial failure is the operator's call
     expect(getTask(parentId)?.status).toBe("proposed");
-    expect(
-      getTaskEvents(parentId).some((e) => e.kind === "transition" && e.to_status === "done"),
-    ).toBe(false);
+    expect(getTaskEvents(parentId).some((e) => e.kind === "transition" && e.to_status === "done")).toBe(false);
     expect((await summaries(projectId))[parentId]).toEqual({ total: 2, terminal: 2, done: 1 });
   });
 
@@ -855,16 +862,12 @@ describe("plan step 2 — parent roll-up signal + auto-complete (W4.1-c)", () =>
     await force(c2, "done"); // parent auto-completes
     expect(getTask(parentId)?.status).toBe("done");
     expect(getTaskEvents(parentId).filter((e) => e.kind === "rollup")).toHaveLength(1);
-    expect(
-      getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done"),
-    ).toHaveLength(1);
+    expect(getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done")).toHaveLength(1);
 
     // re-trigger the terminal roll-up path on the already-done parent (done→done admin force)
     await force(c1, "done");
     expect(getTaskEvents(parentId).filter((e) => e.kind === "rollup")).toHaveLength(1); // not re-signaled
-    expect(
-      getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done"),
-    ).toHaveLength(1); // not re-completed
+    expect(getTaskEvents(parentId).filter((e) => e.kind === "transition" && e.to_status === "done")).toHaveLength(1); // not re-completed
     expect(getTask(parentId)?.status).toBe("done");
   });
 });
@@ -1177,7 +1180,9 @@ describe("plan step 5 — durable handoffs", () => {
     expect((await post("/task-handoff", { task_id: "x", actor: "bob", summary: "s" })).status).toBe(401);
     const id = await readyTask(await newProject());
     expect((await post("/task-handoff", { task_id: id, actor: "bob" }, ctx.joinToken)).status).toBe(400);
-    expect((await post("/task-handoff", { task_id: "task_nope", actor: "bob", summary: "s" }, ctx.joinToken)).status).toBe(404);
+    expect(
+      (await post("/task-handoff", { task_id: "task_nope", actor: "bob", summary: "s" }, ctx.joinToken)).status,
+    ).toBe(404);
   });
 
   it("writes a structured handoff and serves it back parsed", async () => {
@@ -1203,8 +1208,14 @@ describe("plan step 5 — durable handoffs", () => {
 
   it("appends handoff artifacts to the task", async () => {
     const id = await readyTask(await newProject());
-    await handoff(id, { actor: "bob", summary: "s", artifacts: [{ kind: "pr", uri: "https://x/pr/1", note: "the PR" }] });
-    const got = (await (await getHandoffs(id)).json()) as { artifacts: Array<{ kind: string; uri: string; note: string | null }> };
+    await handoff(id, {
+      actor: "bob",
+      summary: "s",
+      artifacts: [{ kind: "pr", uri: "https://x/pr/1", note: "the PR" }],
+    });
+    const got = (await (await getHandoffs(id)).json()) as {
+      artifacts: Array<{ kind: string; uri: string; note: string | null }>;
+    };
     expect(got.artifacts).toContainEqual({ kind: "pr", uri: "https://x/pr/1", note: "the PR" });
   });
 

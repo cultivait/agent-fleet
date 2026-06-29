@@ -31767,7 +31767,12 @@ function createMcpServer(hubUrl2, joinTok) {
     async () => {
       if (!currentToken) {
         return {
-          content: [{ type: "text", text: "Cannot claim REFEREE: not joined to the fleet (no session token). Call fleet_join first." }],
+          content: [
+            {
+              type: "text",
+              text: "Cannot claim REFEREE: not joined to the fleet (no session token). Call fleet_join first."
+            }
+          ],
           isError: true
         };
       }
@@ -31798,7 +31803,9 @@ function createMcpServer(hubUrl2, joinTok) {
           };
         }
         return {
-          content: [{ type: "text", text: `Claim-referee failed (${status}): ${data.error ?? "unknown error"}` }],
+          content: [
+            { type: "text", text: `Claim-referee failed (${status}): ${data.error ?? "unknown error"}` }
+          ],
           isError: true
         };
       } catch (e) {
@@ -31922,7 +31929,12 @@ function createMcpServer(hubUrl2, joinTok) {
         if (data.length > MAX_IMAGE_B64_CHARS) {
           const kb = Math.round(data.length / 1024);
           return {
-            content: [{ type: "text", text: `Image too large to send: ${kb}KB base64 (cap is 512KB). Resize the image before sending, or use a URL link in text instead.` }],
+            content: [
+              {
+                type: "text",
+                text: `Image too large to send: ${kb}KB base64 (cap is 512KB). Resize the image before sending, or use a URL link in text instead.`
+              }
+            ],
             isError: true
           };
         }
@@ -32241,7 +32253,9 @@ ${channelText}`
     "Meta-harness: move a task to a new lifecycle status (e.g. ratified, in_progress, review, done, blocked, failed, abandoned). Enforced by the hub's allow-list state machine.",
     {
       task_id: external_exports.string().describe("ID of the task to transition (required)."),
-      to: external_exports.string().describe("Target status (required), e.g. ratified | in_progress | review | done | blocked | failed | abandoned."),
+      to: external_exports.string().describe(
+        "Target status (required), e.g. ratified | in_progress | review | done | blocked | failed | abandoned."
+      ),
       actor: external_exports.string().optional().describe("Optional actor/callsign recording who performed the transition."),
       note: external_exports.string().optional().describe("Optional note explaining the transition.")
     },
@@ -32397,7 +32411,10 @@ ${channelText}`
         const deps = result.deps ?? [];
         const header = proj ? `Project: ${proj.title} (${proj.id})` : `Project: ${project_id}`;
         const byStatus = {};
-        for (const t of tasks) (byStatus[t.status] ??= []).push(t);
+        for (const t of tasks) {
+          byStatus[t.status] ??= [];
+          byStatus[t.status].push(t);
+        }
         const lines = [header, `${tasks.length} task(s):`];
         for (const [status, group] of Object.entries(byStatus)) {
           lines.push(`  ${status} (${group.length}):`);
@@ -32729,12 +32746,20 @@ ${channelText}`
       try {
         const sid = resolveOwnerSid(owner_sid, process.env.CLAUDE_CODE_SESSION_ID);
         if (!sid) {
-          return { content: [{ type: "text", text: "Lock acquire failed: no owner_sid (and CLAUDE_CODE_SESSION_ID unset)" }], isError: true };
+          return {
+            content: [
+              { type: "text", text: "Lock acquire failed: no owner_sid (and CLAUDE_CODE_SESSION_ID unset)" }
+            ],
+            isError: true
+          };
         }
         const result = await client.lockAcquire(joinToken, { resource_key, owner_sid: sid, lease_ms });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Lock acquire failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Lock acquire failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32755,7 +32780,10 @@ ${channelText}`
         const result = await client.lockRenew(joinToken, { resource_key, owner_sid: sid, lease_ms });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Lock renew failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Lock renew failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32775,7 +32803,10 @@ ${channelText}`
         const result = await client.lockRelease(joinToken, { resource_key, owner_sid: sid });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Lock release failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Lock release failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32825,9 +32856,13 @@ ${channelText}`
         diminishing_returns: external_exports.object({ window: external_exports.number(), min_improvement: external_exports.number() }).optional().describe("Stop when the last `window` improvements are all below min_improvement."),
         repetition: external_exports.object({ window: external_exports.number() }).optional().describe("Stop when the last `window` reported signatures are all identical."),
         evaluator_optimizer: external_exports.object({
-          completeness_target: external_exports.number().optional().describe("Accept (guardrail) when reported completeness >= this, even if the judge keeps saying retry."),
+          completeness_target: external_exports.number().optional().describe(
+            "Accept (guardrail) when reported completeness >= this, even if the judge keeps saying retry."
+          ),
           plateau: external_exports.object({ window: external_exports.number(), epsilon: external_exports.number() }).optional().describe("Stop with 'plateau' when the last `window` completeness scores span <= epsilon.")
-        }).optional().describe("Evaluator-optimizer guardrails for kind:'evaluator_optimizer' loops (use with fleet_loop_verdict)."),
+        }).optional().describe(
+          "Evaluator-optimizer guardrails for kind:'evaluator_optimizer' loops (use with fleet_loop_verdict)."
+        ),
         fleet_pool: external_exports.string().nullable().optional().describe("Seam for a future fleet-wide quota pool.")
       }).optional().describe("Composable stop-conditions, all optional, evaluated OR-wise (first-trip-wins)."),
       interval_ms: external_exports.number().positive().optional().describe(
@@ -32849,7 +32884,10 @@ ${channelText}`
         });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop create failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop create failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32879,7 +32917,10 @@ ${channelText}`
         });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop tick failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop tick failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32906,7 +32947,10 @@ ${channelText}`
         const result = await client.loopVerdict(currentToken, { id, verdict, iteration_delta, tokens_delta });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop verdict failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop verdict failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32920,7 +32964,10 @@ ${channelText}`
         const result = await client.loopLifecycle(currentToken, "/loop-pause", { id });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop pause failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop pause failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32934,7 +32981,10 @@ ${channelText}`
         const result = await client.loopLifecycle(currentToken, "/loop-resume", { id });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop resume failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop resume failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32951,7 +33001,10 @@ ${channelText}`
         const result = await client.loopLifecycle(currentToken, "/loop-stop", { id, reason });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop stop failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop stop failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32965,7 +33018,10 @@ ${channelText}`
         const result = await client.loopGet(currentToken, id);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop get failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop get failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32982,7 +33038,10 @@ ${channelText}`
         const result = await client.loopList(currentToken, { status, owner_callsign });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop list failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop list failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -32997,7 +33056,12 @@ ${channelText}`
       const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
       if (!adminToken) {
         return {
-          content: [{ type: "text", text: "Cannot force-stop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment." }],
+          content: [
+            {
+              type: "text",
+              text: "Cannot force-stop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment."
+            }
+          ],
           isError: true
         };
       }
@@ -33005,7 +33069,10 @@ ${channelText}`
         const result = await client.loopAdminStop(adminToken, id, reason);
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop admin-stop failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop admin-stop failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );
@@ -33059,7 +33126,10 @@ ${channelText}`
         const result = await client.loopBind(currentToken, { id, criteria, project_id });
         return { content: [{ type: "text", text: JSON.stringify(result) }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Loop bind failed: ${e.message}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `Loop bind failed: ${e.message}` }],
+          isError: true
+        };
       }
     }
   );

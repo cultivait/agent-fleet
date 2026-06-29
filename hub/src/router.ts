@@ -30,8 +30,7 @@ export function resetRouterState(): void {
 function resolveMentions(content: string, members: string[]): string[] {
   const found = new Set<string>();
   const re = /@([A-Za-z0-9_-]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(content)) !== null) {
+  for (const match of content.matchAll(re)) {
     const name = match[1];
     if (name !== "all" && members.includes(name)) found.add(name);
   }

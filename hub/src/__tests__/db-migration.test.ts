@@ -39,9 +39,7 @@ describe("Agent Fleet db path migration (copy-on-boot)", () => {
   it("copies a legacy walkie-talkie.db → agent-fleet.db on first boot, carrying data over", () => {
     // Seed a legacy db with a recognizable channel.
     const legacy = new Database(path.join(tmp, "walkie-talkie.db"));
-    legacy.exec(
-      "CREATE TABLE channels (name TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at INTEGER NOT NULL)",
-    );
+    legacy.exec("CREATE TABLE channels (name TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at INTEGER NOT NULL)");
     legacy.prepare("INSERT INTO channels (name, created_by, created_at) VALUES (?, ?, ?)").run("#carryover", "seed", 1);
     legacy.close();
 
@@ -66,9 +64,7 @@ describe("Agent Fleet db path migration (copy-on-boot)", () => {
   it("honors an explicit AGENT_FLEET_DB_PATH override and skips the legacy migration", () => {
     // Legacy default is present, but an explicit override must win and NOT trigger a copy.
     const legacy = new Database(path.join(tmp, "walkie-talkie.db"));
-    legacy.exec(
-      "CREATE TABLE channels (name TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at INTEGER NOT NULL)",
-    );
+    legacy.exec("CREATE TABLE channels (name TEXT PRIMARY KEY, created_by TEXT NOT NULL, created_at INTEGER NOT NULL)");
     legacy.close();
 
     const explicit = path.join(tmp, "explicit.db");

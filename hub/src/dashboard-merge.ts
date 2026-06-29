@@ -60,11 +60,7 @@ export function mergeChannelHistory<T extends MergeMessage>(
   // timestamp ascending (ties keep their fetched order — already chronological
   // from the endpoint) so chained insertions land in order.
   const newMessages = fetched.filter(
-    (m) =>
-      m &&
-      typeof m.id === "string" &&
-      typeof m.timestamp === "number" &&
-      !seen.has(m.id),
+    (m) => m && typeof m.id === "string" && typeof m.timestamp === "number" && !seen.has(m.id),
   );
   if (newMessages.length === 0) return [];
   newMessages.sort((a, b) => a.timestamp - b.timestamp);

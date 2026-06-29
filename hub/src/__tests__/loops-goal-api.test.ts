@@ -91,7 +91,11 @@ describe("loop-goal (item 2) — operator-create → bind → criteria gate → 
       loop: Loop;
     };
     const ref = await registerPrincipal("ref-approve");
-    await tokPost("/loop-bind", { id: created.loop.id, criteria: { rubric: "build < 60s", completeness_target: 0.8 } }, ref);
+    await tokPost(
+      "/loop-bind",
+      { id: created.loop.id, criteria: { rubric: "build < 60s", completeness_target: 0.8 } },
+      ref,
+    );
     const { approvals } = await adminGet<{ approvals: Approval[] }>(`/loop-approvals?loop_id=${created.loop.id}`);
     const gateId = approvals[0].id;
 
@@ -105,7 +109,7 @@ describe("loop-goal (item 2) — operator-create → bind → criteria gate → 
   it("edit-then-approve persists the operator's edited criteria", async () => {
     const created = (await (await adminPost("/loop-admin-create-draft", { goal: "Edit me" })).json()) as { loop: Loop };
     const ref = await registerPrincipal("ref-edit");
-    await tokPost("/loop-bind", { id: created.loop.id, criteria: { rubric: "original" }, }, ref);
+    await tokPost("/loop-bind", { id: created.loop.id, criteria: { rubric: "original" } }, ref);
     const { approvals } = await adminGet<{ approvals: Approval[] }>(`/loop-approvals?loop_id=${created.loop.id}`);
     const res = await adminPost("/loop-approval-resolve", {
       id: approvals[0].id,
@@ -119,7 +123,9 @@ describe("loop-goal (item 2) — operator-create → bind → criteria gate → 
   });
 
   it("reject-and-regenerate sends the loop back to draft", async () => {
-    const created = (await (await adminPost("/loop-admin-create-draft", { goal: "Reject me" })).json()) as { loop: Loop };
+    const created = (await (await adminPost("/loop-admin-create-draft", { goal: "Reject me" })).json()) as {
+      loop: Loop;
+    };
     const ref = await registerPrincipal("ref-reject");
     await tokPost("/loop-bind", { id: created.loop.id, criteria: { rubric: "r" } }, ref);
     const { approvals } = await adminGet<{ approvals: Approval[] }>(`/loop-approvals?loop_id=${created.loop.id}`);
@@ -142,7 +148,9 @@ describe("loop-goal (item 2) — operator-create → bind → criteria gate → 
     expect(loop.status).toBe("running");
     expect(loop.acceptance_criteria?.rubric).toBe("auto");
     // no pending gate was opened
-    const { approvals } = await adminGet<{ approvals: Approval[] }>(`/loop-approvals?loop_id=${created.loop.id}&status=pending`);
+    const { approvals } = await adminGet<{ approvals: Approval[] }>(
+      `/loop-approvals?loop_id=${created.loop.id}&status=pending`,
+    );
     expect(approvals.length).toBe(0);
   });
 

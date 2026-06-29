@@ -1,4 +1,4 @@
-import { generateKeyPairSync, createSign, randomBytes } from "node:crypto";
+import { createSign, generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resetCfAccessJwksCache } from "../auth.js";

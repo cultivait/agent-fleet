@@ -47,7 +47,11 @@ function ring(
   firstSampleAt?: number,
 ): SessionRing {
   return {
-    samples: samples.map((s) => ({ sampledAt: s.sampledAt, contextTs: s.contextTs, contextTokens: s.contextTokens ?? null })),
+    samples: samples.map((s) => ({
+      sampledAt: s.sampledAt,
+      contextTs: s.contextTs,
+      contextTokens: s.contextTokens ?? null,
+    })),
     firstSampleAt: firstSampleAt ?? samples[0].sampledAt,
   };
 }
@@ -131,7 +135,9 @@ describe("idleVerdict — temporal Δ-flat liveness (#11)", () => {
 
   it("Δ-ONLY GUARD: an ANCIENT but UNCHANGING gauge → HEALTHY-IDLE (flatness, not age, decides)", () => {
     const ancient = NOW - 10 * W;
-    expect(idleVerdict(flatRing(ancient), NOW, epoch, DEFAULT_CONFIG, { bracketOpen: null }).verdict).toBe("HEALTHY-IDLE");
+    expect(idleVerdict(flatRing(ancient), NOW, epoch, DEFAULT_CONFIG, { bracketOpen: null }).verdict).toBe(
+      "HEALTHY-IDLE",
+    );
   });
 
   it("producer-less (all context_ts null) → UNKNOWN, NEVER idle", () => {
@@ -182,14 +188,20 @@ describe("appendSample — ring maintenance + straddle (#11 Gap B)", () => {
   });
 
   it("straddle: a large context_tokens DROP resets the ring to warm-up (fail-safe → UNKNOWN)", () => {
-    const prior: SessionRing = { samples: [{ sampledAt: NOW - 1000, contextTs: 5, contextTokens: 200_000 }], firstSampleAt: NOW - 1000 };
+    const prior: SessionRing = {
+      samples: [{ sampledAt: NOW - 1000, contextTs: 5, contextTokens: 200_000 }],
+      firstSampleAt: NOW - 1000,
+    };
     const r = appendSample(prior, { sampledAt: NOW, contextTs: 6, contextTokens: 100_000 }, DEFAULT_CONFIG); // −100k ≥ 50k
     expect(r.samples).toHaveLength(1);
     expect(r.firstSampleAt).toBe(NOW); // reset → re-warm-up
   });
 
   it("a small token decrease does NOT reset (normal fluctuation)", () => {
-    const prior: SessionRing = { samples: [{ sampledAt: NOW - 1000, contextTs: 5, contextTokens: 200_000 }], firstSampleAt: NOW - 1000 };
+    const prior: SessionRing = {
+      samples: [{ sampledAt: NOW - 1000, contextTs: 5, contextTokens: 200_000 }],
+      firstSampleAt: NOW - 1000,
+    };
     const r = appendSample(prior, { sampledAt: NOW, contextTs: 6, contextTokens: 199_000 }, DEFAULT_CONFIG); // −1k < 50k
     expect(r.samples).toHaveLength(2);
     expect(r.firstSampleAt).toBe(NOW - 1000);
@@ -221,9 +233,12 @@ describe("evaluateFleet — idle-reap FLAG-only end-to-end (#11)", () => {
   }
 
   it("FLAGS a flat, not-busy agent after W_idle of unchanging context_ts — NON-destructive, NO kill path", () => {
-    const r = ticks(() => [mkEntry({ session_id: "sx", control_handle: "tmux:wt-spx", context_ts: 5000, context_tokens: 100 })], {
-      busySessionIds: [],
-    });
+    const r = ticks(
+      () => [mkEntry({ session_id: "sx", control_handle: "tmux:wt-spx", context_ts: 5000, context_tokens: 100 })],
+      {
+        busySessionIds: [],
+      },
+    );
     const flags = r.intents.filter((i) => i.kind === "flag");
     expect(flags).toHaveLength(1);
     expect(flags[0].sessionId).toBe("sx");
@@ -233,12 +248,16 @@ describe("evaluateFleet — idle-reap FLAG-only end-to-end (#11)", () => {
   });
 
   it("does NOT flag while context_ts keeps advancing (active agent)", () => {
-    const r = ticks((now) => [mkEntry({ session_id: "sx", context_ts: now, context_tokens: 100 })], { busySessionIds: [] });
+    const r = ticks((now) => [mkEntry({ session_id: "sx", context_ts: now, context_tokens: 100 })], {
+      busySessionIds: [],
+    });
     expect(r.intents.filter((i) => i.kind === "flag")).toHaveLength(0);
   });
 
   it("does NOT flag a busy (corroboration) agent even when flat", () => {
-    const r = ticks(() => [mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: 100 })], { busySessionIds: ["sx"] });
+    const r = ticks(() => [mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: 100 })], {
+      busySessionIds: ["sx"],
+    });
     expect(r.intents.filter((i) => i.kind === "flag")).toHaveLength(0);
   });
 
@@ -251,7 +270,10 @@ describe("evaluateFleet — idle-reap FLAG-only end-to-end (#11)", () => {
   });
 
   it("does NOT flag before W_idle (single tick = warm-up)", () => {
-    const r = evaluateFleet(snap([mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: 100 })], { busySessionIds: [] }), EMPTY_STATE);
+    const r = evaluateFleet(
+      snap([mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: 100 })], { busySessionIds: [] }),
+      EMPTY_STATE,
+    );
     expect(r.intents).toHaveLength(0);
   });
 
@@ -267,7 +289,14 @@ describe("evaluateFleet — idle-reap FLAG-only end-to-end (#11)", () => {
     const e = mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: 100 });
     const r1 = evaluateFleet(snap([e], { busySessionIds: [] }), EMPTY_STATE);
     expect(r1.nextState.rings.sx).toBeTruthy();
-    const r2 = evaluateFleet({ registry: [mkEntry({ session_id: "sy", context_ts: 1, context_tokens: 1 })], now: NOW + 1000, busySessionIds: [] }, r1.nextState);
+    const r2 = evaluateFleet(
+      {
+        registry: [mkEntry({ session_id: "sy", context_ts: 1, context_tokens: 1 })],
+        now: NOW + 1000,
+        busySessionIds: [],
+      },
+      r1.nextState,
+    );
     expect(r2.nextState.rings.sx).toBeUndefined();
   });
 
@@ -277,7 +306,14 @@ describe("evaluateFleet — idle-reap FLAG-only end-to-end (#11)", () => {
     for (let i = 0; i < 5; i++) {
       const now = NOW + i * (W / 4);
       const tokens = i < 4 ? 300_000 : 100_000; // compaction on the last tick (−200k)
-      res = evaluateFleet({ registry: [mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: tokens })], now, busySessionIds: [] }, state);
+      res = evaluateFleet(
+        {
+          registry: [mkEntry({ session_id: "sx", context_ts: 5000, context_tokens: tokens })],
+          now,
+          busySessionIds: [],
+        },
+        state,
+      );
       state = res.nextState;
     }
     expect(res.intents.filter((i) => i.kind === "flag")).toHaveLength(0); // reset → warm-up
@@ -309,14 +345,18 @@ describe("evaluateFleet — over-budget is neither reap-exempt nor a reap-trigge
   });
 
   it("an over-budget FLAT agent is FLAGGED like any idle agent (no compact exemption)", () => {
-    const r = flatTicks(() => [mkEntry({ session_id: "sx", context_tokens: 420_000, context_ts: 5000 })], { busySessionIds: [] });
+    const r = flatTicks(() => [mkEntry({ session_id: "sx", context_tokens: 420_000, context_ts: 5000 })], {
+      busySessionIds: [],
+    });
     const flags = r.intents.filter((i) => i.kind === "flag");
     expect(flags).toHaveLength(1);
     expect(flags[0].sessionId).toBe("sx");
   });
 
   it("an over-budget but ADVANCING agent triggers nothing (over-budget is not a reap-trigger)", () => {
-    const r = flatTicks((now) => [mkEntry({ session_id: "sx", context_tokens: 500_000, context_ts: now })], { busySessionIds: [] });
+    const r = flatTicks((now) => [mkEntry({ session_id: "sx", context_tokens: 500_000, context_ts: now })], {
+      busySessionIds: [],
+    });
     expect(r.intents).toHaveLength(0);
   });
 });
@@ -401,7 +441,13 @@ describe("evaluateFleet — A3 callsign-keyed pin (kill-exempt)", () => {
   }
 
   const flat = (_now: number) => [
-    mkEntry({ session_id: "sx", callsign: "linux-sx", control_handle: "tmux:wt-spx", context_ts: 5000, context_tokens: 100 }),
+    mkEntry({
+      session_id: "sx",
+      callsign: "linux-sx",
+      control_handle: "tmux:wt-spx",
+      context_ts: 5000,
+      context_tokens: 100,
+    }),
   ];
 
   it("baseline: the flat agent DOES flag when NOT pinned (control)", () => {
@@ -445,7 +491,13 @@ describe("evaluateFleet — A3 callsign-keyed pin (kill-exempt)", () => {
 
   it("a null-callsign session cannot be pinned (still flags when flat)", () => {
     const nullCs = (_now: number) => [
-      mkEntry({ session_id: "sx", callsign: null, control_handle: "tmux:wt-spx", context_ts: 5000, context_tokens: 100 }),
+      mkEntry({
+        session_id: "sx",
+        callsign: null,
+        control_handle: "tmux:wt-spx",
+        context_ts: 5000,
+        context_tokens: 100,
+      }),
     ];
     const r = ticks(nullCs, { busySessionIds: [], pinnedCallsigns: ["linux-sx"] });
     expect(r.intents.filter((i) => i.kind === "flag")).toHaveLength(1);

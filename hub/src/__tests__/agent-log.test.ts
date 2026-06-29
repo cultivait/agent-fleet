@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { dbInsertLog, dbListLog, dbListLatestLogPerAgent, dbListLogSince, initDB } from "../db.js";
+import { dbInsertLog, dbListLatestLogPerAgent, dbListLog, dbListLogSince, initDB } from "../db.js";
 
 // Pure DB-layer tests for the board auto-digest logbook (agent_log). Append-only,
 // per-agent; the dashboard reads these — they never wake anyone.

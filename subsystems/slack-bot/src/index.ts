@@ -10,7 +10,8 @@ const SLACK_BOT_TOKEN = process.env.AGENT_FLEET_SLACK_BOT_TOKEN ?? process.env.W
 const SLACK_APP_TOKEN = process.env.AGENT_FLEET_SLACK_APP_TOKEN ?? process.env.WALKIE_TALKIE_SLACK_APP_TOKEN;
 const HUB_URL = process.env.AGENT_FLEET_HUB_URL || process.env.WALKIE_TALKIE_HUB_URL || "http://localhost:9559";
 const JOIN_TOKEN = process.env.AGENT_FLEET_JOIN_TOKEN ?? process.env.WALKIE_TALKIE_JOIN_TOKEN;
-let slackNotifyChannel: string | null = process.env.AGENT_FLEET_SLACK_SYSTEM_NOTIFY_CHANNEL ?? process.env.WALKIE_TALKIE_SLACK_SYSTEM_NOTIFY_CHANNEL ?? null;
+let slackNotifyChannel: string | null =
+  process.env.AGENT_FLEET_SLACK_SYSTEM_NOTIFY_CHANNEL ?? process.env.WALKIE_TALKIE_SLACK_SYSTEM_NOTIFY_CHANNEL ?? null;
 const BOT_NAME = "slack";
 
 if (!SLACK_BOT_TOKEN) {

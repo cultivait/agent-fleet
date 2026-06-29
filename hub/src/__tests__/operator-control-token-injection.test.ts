@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import { describe, expect, it } from "vitest";
 import { cockpitScript } from "../cockpit-ui.js";
 import { getDashboardHTML } from "../dashboard.js";
 
@@ -49,9 +49,7 @@ describe("WS-C — operator-control admin token injection", () => {
       reportDiagnostics: true,
       compilerOptions: { allowJs: true, checkJs: false, target: ts.ScriptTarget.ES2017 },
     });
-    const syntaxErrors = (result.diagnostics ?? []).filter(
-      (d) => d.category === ts.DiagnosticCategory.Error,
-    );
+    const syntaxErrors = (result.diagnostics ?? []).filter((d) => d.category === ts.DiagnosticCategory.Error);
     expect(syntaxErrors).toHaveLength(0);
   });
 });

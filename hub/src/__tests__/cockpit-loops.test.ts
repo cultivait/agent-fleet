@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildLoopView, buildLoopViews, loopFmtDuration, loopFmtInt, loopSparkPath, type LoopRow } from "../cockpit-loops.js";
+import {
+  buildLoopView,
+  buildLoopViews,
+  type LoopRow,
+  loopFmtDuration,
+  loopFmtInt,
+  loopSparkPath,
+} from "../cockpit-loops.js";
 
 // Fixture builder — minimal Loop row with overridable config/state.
 function row(o: Partial<LoopRow> & { id: string }): LoopRow {
@@ -49,10 +56,7 @@ describe("buildLoopView — gauges", () => {
   });
 
   it("computes the wall-clock gauge from now - created_at", () => {
-    const v = buildLoopView(
-      row({ id: "t", created_at: 1000, config: { wall_clock_timeout_ms: 10_000 } }),
-      6000,
-    );
+    const v = buildLoopView(row({ id: "t", created_at: 1000, config: { wall_clock_timeout_ms: 10_000 } }), 6000);
     expect(v.time.ratio).toBeCloseTo(0.5, 5);
     expect(v.time.label).toBe("0:05 / 0:10");
   });
@@ -113,7 +117,13 @@ describe("buildLoopView — pressure", () => {
 
   it("mutes pressure for terminal loops even past a cap", () => {
     const stopped = buildLoopView(
-      row({ id: "done", status: "stopped", stop_reason: "max_iterations", config: { max_iterations: 10 }, state: { iterations: 10 } }),
+      row({
+        id: "done",
+        status: "stopped",
+        stop_reason: "max_iterations",
+        config: { max_iterations: 10 },
+        state: { iterations: 10 },
+      }),
       0,
     );
     expect(stopped.pressure).toBe("ok");
@@ -173,10 +183,7 @@ describe("buildLoopView — Phase 4 scores/verdict (optional)", () => {
   });
 
   it("filters non-numeric junk out of scores", () => {
-    const v = buildLoopView(
-      row({ id: "junk", state: { scores: [0.1, "nope" as unknown as number, 0.3] } }),
-      0,
-    );
+    const v = buildLoopView(row({ id: "junk", state: { scores: [0.1, "nope" as unknown as number, 0.3] } }), 0);
     expect(v.scores).toEqual([0.1, 0.3]);
   });
 });

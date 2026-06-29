@@ -1,13 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createLoop, getLoop, pauseLoop, resumeLoop, submitVerdict, tickLoop } from "../loops/store.js";
 import { getPendingApprovalForLoop } from "../loops/approvals.js";
+import { createLoop, getLoop, pauseLoop, resumeLoop, submitVerdict, tickLoop } from "../loops/store.js";
 import type { Verdict } from "../loops/verdict.js";
-import {
-  registerUser,
-  startTestServer,
-  stopTestServer,
-  type TestContext,
-} from "./helpers/server-harness.js";
+import { registerUser, startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;
 let aliceToken: string;
@@ -198,11 +193,7 @@ function post(path: string, body: unknown, token?: string): Promise<Response> {
 }
 
 async function createEoLoopViaApi(config: unknown = {}): Promise<string> {
-  const res = await post(
-    "/loop-create",
-    { kind: "evaluator_optimizer", label: "api-eo", config },
-    aliceToken,
-  );
+  const res = await post("/loop-create", { kind: "evaluator_optimizer", label: "api-eo", config }, aliceToken);
   expect(res.status).toBe(200);
   const { loop } = (await res.json()) as { loop: { id: string } };
   return loop.id;
@@ -229,11 +220,7 @@ describe("/loop-verdict API — auth, decision, validation", () => {
 
   it("an 'accept' verdict stops the loop end-to-end", async () => {
     const id = await createEoLoopViaApi();
-    const res = await post(
-      "/loop-verdict",
-      { id, verdict: verdict({ recommendation: "accept" }) },
-      aliceToken,
-    );
+    const res = await post("/loop-verdict", { id, verdict: verdict({ recommendation: "accept" }) }, aliceToken);
     const body = (await res.json()) as { result: { continue: boolean; stop_reason?: string } };
     expect(body.result).toEqual({ continue: false, stop_reason: "accepted" });
   });
@@ -242,10 +229,14 @@ describe("/loop-verdict API — auth, decision, validation", () => {
     const id = await createEoLoopViaApi();
     expect((await post("/loop-verdict", { id }, aliceToken)).status).toBe(400);
     expect(
-      (await post("/loop-verdict", { id, verdict: { status: "bad", completeness: 0.5, recommendation: "retry" } }, aliceToken)).status,
+      (
+        await post(
+          "/loop-verdict",
+          { id, verdict: { status: "bad", completeness: 0.5, recommendation: "retry" } },
+          aliceToken,
+        )
+      ).status,
     ).toBe(400);
-    expect(
-      (await post("/loop-verdict", { id: "loop_missing", verdict: verdict() }, aliceToken)).status,
-    ).toBe(404);
+    expect((await post("/loop-verdict", { id: "loop_missing", verdict: verdict() }, aliceToken)).status).toBe(404);
   });
 });

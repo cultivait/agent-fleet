@@ -72,9 +72,7 @@ export function canTransition(from: string, to: string): boolean {
   return (TRANSITIONS[from] ?? []).includes(to);
 }
 
-export type TransitionResult =
-  | { ok: true; task: TaskRow }
-  | { ok: false; code: number; error: string };
+export type TransitionResult = { ok: true; task: TaskRow } | { ok: false; code: number; error: string };
 
 // F2 owner-gating. Once a task is claimed it has an owner, and only that owner
 // drives its work. The lone exception is the review gate: `review→done` is a
@@ -439,7 +437,13 @@ export function promoteIfReady(taskId: string): boolean {
     return false;
   }
   setTaskStatus(taskId, "ready");
-  logEvent(taskId, { actor: null, kind: "transition", fromStatus: "ratified", toStatus: "ready", note: "auto-unblock" });
+  logEvent(taskId, {
+    actor: null,
+    kind: "transition",
+    fromStatus: "ratified",
+    toStatus: "ready",
+    note: "auto-unblock",
+  });
   onTaskReady?.(taskId, task.project_id); // C2: notify work-steal subscribers
   return true;
 }

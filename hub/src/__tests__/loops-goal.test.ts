@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createApproval, getPendingApprovalForLoop, openCriteriaGate } from "../loops/approvals.js";
 import {
   applyAcceptanceCriteria,
   bindLoopToReferee,
@@ -9,7 +10,6 @@ import {
   stopLoop,
   tickLoop,
 } from "../loops/store.js";
-import { createApproval, getPendingApprovalForLoop, openCriteriaGate } from "../loops/approvals.js";
 import { startTestServer, stopTestServer, type TestContext } from "./helpers/server-harness.js";
 
 let ctx: TestContext;

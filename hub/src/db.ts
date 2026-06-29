@@ -3,11 +3,10 @@ import { copyFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-
-import { initPlanSchema } from "./plan/store.js";
-import { initLoopSchema } from "./loops/store.js";
-import { initReflexionSchema } from "./loops/reflexion.js";
 import { initApprovalSchema } from "./loops/approvals.js";
+import { initReflexionSchema } from "./loops/reflexion.js";
+import { initLoopSchema } from "./loops/store.js";
+import { initPlanSchema } from "./plan/store.js";
 import type { Message, MessageImage, PendingAckRow, RegistryEntry } from "./types.js";
 
 export interface AgentConfigRow {
@@ -55,9 +54,7 @@ let db: Database.Database;
 
 export function initDB(): void {
   const dbPath =
-    process.env.AGENT_FLEET_DB_PATH ??
-    process.env.WALKIE_TALKIE_DB_PATH ??
-    path.join(process.cwd(), "agent-fleet.db");
+    process.env.AGENT_FLEET_DB_PATH ?? process.env.WALKIE_TALKIE_DB_PATH ?? path.join(process.cwd(), "agent-fleet.db");
 
   // === TEST SAFETY GUARD — regression-proof test isolation ===
   // Under a test runner the DB must NEVER resolve to a real, shared store — above all
@@ -315,9 +312,7 @@ export function initDB(): void {
   db.exec(
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_session ON registry (session_id) WHERE session_id IS NOT NULL",
   );
-  db.exec(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_spawn ON registry (spawn_id) WHERE spawn_id IS NOT NULL",
-  );
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_spawn ON registry (spawn_id) WHERE spawn_id IS NOT NULL");
 
   // === Board auto-digest: agent_log ===
   // Append-only per-agent logbook. One row per fleet_log emit — the "detailed
@@ -408,7 +403,7 @@ export function dbRenameChannel(from: string, to: string): boolean {
   const apply = db.transaction(() => {
     db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
     db.prepare("UPDATE channel_members SET channel = ? WHERE channel = ?").run(to, from);
-    db.prepare('UPDATE messages SET channel = ? WHERE channel = ?').run(to, from);
+    db.prepare("UPDATE messages SET channel = ? WHERE channel = ?").run(to, from);
     db.prepare("UPDATE read_cursors SET channel = ? WHERE channel = ?").run(to, from);
     // channel_seq.channel is the PK and is NOT cleared on channel delete, so a
     // stale orphan row for `to` could collide on re-key — drop it first, then
@@ -511,7 +506,9 @@ export interface DmThread {
 // One row per DM thread (canonical pair), newest-active first — for the cockpit pane.
 export function dbListDmThreads(): DmThread[] {
   const rows = db
-    .prepare(`SELECT pair, COUNT(*) AS count, MAX(timestamp) AS last_ts FROM dm_messages GROUP BY pair ORDER BY last_ts DESC`)
+    .prepare(
+      `SELECT pair, COUNT(*) AS count, MAX(timestamp) AS last_ts FROM dm_messages GROUP BY pair ORDER BY last_ts DESC`,
+    )
     .all() as { pair: string; count: number; last_ts: number }[];
   return rows.map((r) => {
     const [a, b] = r.pair.split("|");
@@ -706,9 +703,7 @@ export function dbDeleteBoardEntry(name: string): boolean {
 // list returns newest-first, capped, for a single agent.
 export function dbInsertLog(name: string, kind: string, note: string): AgentLogRow {
   const ts = Date.now();
-  const info = db
-    .prepare("INSERT INTO agent_log (name, ts, kind, note) VALUES (?, ?, ?, ?)")
-    .run(name, ts, kind, note);
+  const info = db.prepare("INSERT INTO agent_log (name, ts, kind, note) VALUES (?, ?, ?, ?)").run(name, ts, kind, note);
   return { id: Number(info.lastInsertRowid), name, ts, kind, note };
 }
 
@@ -742,9 +737,7 @@ export function dbListLogSince(sinceId: number, excludeName: string | null, limi
       .prepare("SELECT * FROM agent_log WHERE id > ? AND name != ? ORDER BY id DESC LIMIT ?")
       .all(sinceId, excludeName, lim) as AgentLogRow[];
   }
-  return db
-    .prepare("SELECT * FROM agent_log WHERE id > ? ORDER BY id DESC LIMIT ?")
-    .all(sinceId, lim) as AgentLogRow[];
+  return db.prepare("SELECT * FROM agent_log WHERE id > ? ORDER BY id DESC LIMIT ?").all(sinceId, lim) as AgentLogRow[];
 }
 
 // Agent config CRUD
@@ -818,15 +811,18 @@ export function dbDeleteAgentConfig(id: string): boolean {
 // === C1: pending_ack CRUD ===
 
 export function dbCreatePendingAck(msgId: string, senderSid: string, channel: string): void {
-  db.prepare(
-    "INSERT OR IGNORE INTO pending_ack (msg_id, sender_sid, channel, created_at) VALUES (?, ?, ?, ?)",
-  ).run(msgId, senderSid, channel, Date.now());
+  db.prepare("INSERT OR IGNORE INTO pending_ack (msg_id, sender_sid, channel, created_at) VALUES (?, ?, ?, ?)").run(
+    msgId,
+    senderSid,
+    channel,
+    Date.now(),
+  );
 }
 
 export function dbGetPendingAck(msgId: string): PendingAckRow | undefined {
-  return db.prepare("SELECT msg_id, sender_sid, channel, created_at FROM pending_ack WHERE msg_id = ?").get(
-    msgId,
-  ) as PendingAckRow | undefined;
+  return db.prepare("SELECT msg_id, sender_sid, channel, created_at FROM pending_ack WHERE msg_id = ?").get(msgId) as
+    | PendingAckRow
+    | undefined;
 }
 
 export function dbDeletePendingAck(msgId: string): boolean {
@@ -877,11 +873,7 @@ export function dbAcquireResourceLock(
 }
 
 // Sliding renewal: only renews if the caller still owns the lock.
-export function dbRenewResourceLock(
-  resourceKey: string,
-  ownerSid: string,
-  leaseExpiresAt: number,
-): boolean {
+export function dbRenewResourceLock(resourceKey: string, ownerSid: string, leaseExpiresAt: number): boolean {
   const result = db
     .prepare(
       `UPDATE resource_lock SET lease_expires_at = ?

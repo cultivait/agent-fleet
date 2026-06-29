@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeChannelHistory, type MergeMessage } from "../dashboard-merge.js";
+import { type MergeMessage, mergeChannelHistory } from "../dashboard-merge.js";
 
 interface FetchedMsg extends MergeMessage {
   content?: string;
@@ -100,11 +100,11 @@ describe("mergeChannelHistory", () => {
   it("fails open on malformed / non-array input (returns no insertions)", () => {
     const existing: MergeMessage[] = [{ id: "a", timestamp: 100 }];
     // Simulate a fetch error path / garbage body — never throw, never break.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: deliberately passing malformed input to exercise the fail-open path
     expect(mergeChannelHistory(existing, null as any)).toEqual([]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: deliberately passing malformed input to exercise the fail-open path
     expect(mergeChannelHistory(existing, undefined as any)).toEqual([]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // biome-ignore lint/suspicious/noExplicitAny: deliberately passing malformed input to exercise the fail-open path
     expect(mergeChannelHistory(existing, { messages: [] } as any)).toEqual([]);
   });
 
@@ -116,7 +116,7 @@ describe("mergeChannelHistory", () => {
       { timestamp: 150 }, // missing id → skip
       null, // garbage → skip
       { id: "c", timestamp: 300 }, // good, newer
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // biome-ignore lint/suspicious/noExplicitAny: deliberately passing malformed input to exercise the fail-open path
     ] as any;
 
     const result = mergeChannelHistory(existing, fetched);
