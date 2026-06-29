@@ -44,7 +44,7 @@ function validClaims(over: Partial<Record<string, unknown>> = {}): Record<string
     iss: `https://${TEAM_DOMAIN}`,
     aud: [AUD],
     exp: Math.floor(Date.now() / 1000) + 3600,
-    email: "operator@example.com",
+    email: "operator@cultivait.co",
     ...over,
   };
 }

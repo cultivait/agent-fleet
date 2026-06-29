@@ -9,8 +9,8 @@
 //   SubagentStop-> decrement the live subagent count (>=0)
 //   Stop        -> mark idle (subagent count left intact: bg agents may run on)
 // The mission line is NOT set here: agents set it intentionally via the
-// fleet_mission MCP tool (prompt text is never auto-published — the operator's
-// call, to avoid leaking verbatim prompt text).
+// fleet_mission MCP tool (prompt text is never auto-published — Operator's call,
+// 2026-06-12, after user flagged the leak vector).
 // Auth: AGENT_FLEET_JOIN_TOKEN (same join token the msgcheck hook uses).
 // Exits silently when this session never joined the fleet or the hub is down.
 'use strict';

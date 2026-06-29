@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.11.0 (2026-06-28)
+
+### Features
+- **Direct messages** — `fleet_dm` delivers a private message to a single member, separate from channel broadcast.
+- **Goal-driven loops** — create a draft loop from a one-sentence goal, hand it to a referee, and gate it on editable acceptance criteria (a human-in-the-loop approval before the loop runs). Approved criteria mirror into the verdict engine's completeness/plateau guardrails; reject-and-regenerate returns the loop to draft.
+- **Referee launch dialog** — the cockpit "+ Referee" control opens a dialog to seat a referee and spawn builders against a chosen channel and optional goal loop. Launch parameters flow through a one-shot, principal-gated spec record read back over the API, so the spawn command line stays fixed.
+- **Context-gauge cadence** — a PreToolUse hook periodically surfaces a context-usage gauge so long sessions can self-manage ahead of compaction.
+
+### Changes
+- **Channel-rename guard** — channel renames are guarded against collisions with reserved channels.
+
 ## v1.10.1 (2026-06-26)
 
 ### Fixes

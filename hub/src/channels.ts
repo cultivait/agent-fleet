@@ -75,6 +75,16 @@ export function removeChannel(channel: string): void {
   dbRemoveAllMembersOfChannel(channel);
 }
 
+// Re-key the in-memory membership set from `from` to `to`, preserving members.
+// The DB side (channel_members rows) is moved by dbRenameChannel; this keeps the
+// volatile presence map in sync so live membership/ON-AIR scoping follows the
+// rename without anyone having to re-join.
+export function renameChannel(from: string, to: string): void {
+  const members = channelMembers.get(from) ?? new Set<string>();
+  channelMembers.delete(from);
+  channelMembers.set(to, members);
+}
+
 export function resetChannelState(): void {
   channelMembers.clear();
 }

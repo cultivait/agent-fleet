@@ -1,9 +1,9 @@
 // Vitest setupFile — runs in every test worker BEFORE any test module is imported.
 //
 // WHY THIS EXISTS:
-// A prod hub and every spawned builder shell may export
-//   AGENT_FLEET_DB_PATH=/var/lib/agent-fleet/agent-fleet.db
-// (persisted by the process manager and inherited by every Claude Code session that runs
+// The prod hub and every spawned builder shell export
+//   AGENT_FLEET_DB_PATH=/var/lib/storage/agent-fleet/agent-fleet.db
+// (persisted in ~/.pm2/dump.pm2 and inherited by every Claude Code session that runs
 // `vitest`). db.ts resolves the DB as
 //   AGENT_FLEET_DB_PATH ?? WALKIE_TALKIE_DB_PATH ?? <cwd>/agent-fleet.db
 // but the test suite only ever sets the LEGACY var (WALKIE_TALKIE_DB_PATH=":memory:").

@@ -19,6 +19,7 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { computeNextFire, fireDrift } from "./schedule.js";
 import {
+  type AcceptanceCriteria,
   type EvaluatorOptimizerConfig,
   evaluateVerdict,
   normalizeVerdict,
@@ -28,7 +29,12 @@ import {
 // openApproval (below) opens the HITL queue item; createApproval is the txn-free INSERT.
 import { createApproval } from "./approvals.js";
 
-export type LoopStatus = "running" | "paused" | "stopped" | "completed";
+// Item 2 (loop-goal) adds two PRE-RUN states to the original four:
+//   draft            — operator authored a goal; nothing running yet.
+//   awaiting_approval — a Referee bound the loop + proposed acceptance criteria; nothing
+//                       runs until the operator approves the criteria gate (or the loop's
+//                       auto_approve toggle skips it). On approval → running.
+export type LoopStatus = "running" | "paused" | "stopped" | "completed" | "draft" | "awaiting_approval";
 
 // Base stop conditions plus the Phase-4 evaluator-optimizer outcomes (accepted/escalated/plateau).
 export type StopReason =
@@ -45,7 +51,7 @@ export type StopReason =
   // "escalated" (HITL): verifier recommended escalate → loop PAUSED + approval opened.
   | VerdictStopReason;
 
-export type { Verdict } from "./verdict.js";
+export type { Verdict, AcceptanceCriteria } from "./verdict.js";
 
 // Composable stop-conditions (all optional; evaluated OR-wise, first-trip-wins).
 export interface LoopConfig {
@@ -61,6 +67,7 @@ export interface LoopConfig {
   // Seam for a future fleet-wide pool. Phase 1 ignores the value beyond recording it.
   fleet_pool?: string | null;
 }
+
 
 // Mutable per-loop counters + the short ring buffers for repetition/diminishing detection.
 export interface LoopState {
@@ -91,6 +98,14 @@ export interface LoopRow {
   anchor_ms: number | null;
   last_fire_ms: number | null;
   next_fire_ms: number | null;
+  // Item 2 (loop-goal). goal: operator's one-sentence objective. acceptance_criteria:
+  // JSON AcceptanceCriteria, NULL until the criteria gate is approved. auto_approve:
+  // 0/1 — skip the criteria gate for trusted repeat runs. project_id: the Plan this
+  // loop delegates to (append-wave), NULL until the Referee binds a plan.
+  goal: string | null;
+  acceptance_criteria: string | null;
+  auto_approve: number;
+  project_id: string | null;
 }
 
 // Parsed view returned to callers (config/state decoded).
@@ -111,6 +126,11 @@ export interface Loop {
   anchor_ms: number | null; // wall-clock grid origin
   last_fire_ms: number | null; // actual time of last advancing tick
   next_fire_ms: number | null; // scheduled next fire (drift-corrected, off the grid)
+  // Item 2 (loop-goal): goal-driven loop fields (see LoopRow).
+  goal: string | null;
+  acceptance_criteria: AcceptanceCriteria | null;
+  auto_approve: boolean;
+  project_id: string | null;
 }
 
 export interface TickInput {
@@ -183,6 +203,11 @@ export function initLoopSchema(database: Database.Database): void {
     "anchor_ms INTEGER", // wall-clock grid origin (fires at anchor + N*interval)
     "last_fire_ms INTEGER", // actual wall-clock time of the last advancing tick
     "next_fire_ms INTEGER", // scheduled next fire, recomputed off the grid each tick
+    // Item 2 (loop-goal): goal-driven loop fields. Same guarded-ALTER idiom.
+    "goal TEXT", // operator's one-sentence objective (NULL on non-goal loops)
+    "acceptance_criteria TEXT", // JSON AcceptanceCriteria; NULL until criteria gate approved
+    "auto_approve INTEGER NOT NULL DEFAULT 0", // 1 = skip the criteria gate
+    "project_id TEXT", // the Plan this loop delegates to (append-wave); NULL until bound
   ]) {
     try {
       db.exec(`ALTER TABLE loops ADD COLUMN ${col}`);
@@ -232,6 +257,12 @@ function parseRow(row: LoopRow): Loop {
     anchor_ms: row.anchor_ms ?? null,
     last_fire_ms: row.last_fire_ms ?? null,
     next_fire_ms: row.next_fire_ms ?? null,
+    goal: row.goal ?? null,
+    acceptance_criteria: row.acceptance_criteria
+      ? (JSON.parse(row.acceptance_criteria) as AcceptanceCriteria)
+      : null,
+    auto_approve: !!row.auto_approve,
+    project_id: row.project_id ?? null,
   };
 }
 
@@ -246,6 +277,12 @@ export interface CreateLoopOpts {
   // it defaults to the creation time. Omit interval_ms for a normal loop.
   interval_ms?: number | null;
   anchor_ms?: number | null;
+  // Item 2 (loop-goal). status defaults to "running" (back-compat); operator-create uses
+  // "draft". goal/auto_approve/project_id seed the goal-driven loop record.
+  status?: LoopStatus;
+  goal?: string | null;
+  auto_approve?: boolean;
+  project_id?: string | null;
 }
 
 export function createLoop(opts: CreateLoopOpts): Loop {
@@ -253,6 +290,10 @@ export function createLoop(opts: CreateLoopOpts): Loop {
   const now = Date.now();
   const config = opts.config ?? {};
   const state = freshState();
+  const status: LoopStatus = opts.status ?? "running";
+  const goal = opts.goal ?? null;
+  const autoApprove = opts.auto_approve ? 1 : 0;
+  const projectId = opts.project_id ?? null;
 
   // Recurring scheduling (Phase 3). A NULL interval keeps every schedule column
   // NULL → identical to a Phase-1 loop. computeNextFire validates interval_ms > 0
@@ -266,14 +307,15 @@ export function createLoop(opts: CreateLoopOpts): Loop {
   }
 
   db.prepare(
-    `INSERT INTO loops (id, kind, owner_callsign, owner_sid, label, status, config, state, stop_reason, created_at, updated_at, interval_ms, anchor_ms, last_fire_ms, next_fire_ms)
-     VALUES (?, ?, ?, ?, ?, 'running', ?, ?, NULL, ?, ?, ?, ?, NULL, ?)`,
+    `INSERT INTO loops (id, kind, owner_callsign, owner_sid, label, status, config, state, stop_reason, created_at, updated_at, interval_ms, anchor_ms, last_fire_ms, next_fire_ms, goal, acceptance_criteria, auto_approve, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?)`,
   ).run(
     id,
     opts.kind,
     opts.owner_callsign,
     opts.owner_sid ?? null,
     opts.label,
+    status,
     JSON.stringify(config),
     JSON.stringify(state),
     now,
@@ -281,6 +323,9 @@ export function createLoop(opts: CreateLoopOpts): Loop {
     interval,
     anchor,
     nextFire,
+    goal,
+    autoApprove,
+    projectId,
   );
   return getLoop(id) as Loop;
 }
@@ -305,6 +350,98 @@ export function listLoops(filter?: { status?: LoopStatus; owner_callsign?: strin
   if (where.length) sql += ` WHERE ${where.join(" AND ")}`;
   sql += " ORDER BY created_at DESC";
   return (db.prepare(sql).all(...params) as LoopRow[]).map(parseRow);
+}
+
+// ── Item 2 (loop-goal) state machine ────────────────────────────────────────────
+// The four runtime states (running/paused/stopped/completed) are managed by tickLoop +
+// pause/resume/stop below. These helpers manage the two PRE-RUN states (draft,
+// awaiting_approval) and the criteria gate.
+
+export interface CreateDraftLoopOpts {
+  label: string;
+  goal: string;
+  owner_callsign: string;
+  owner_sid?: string | null;
+  auto_approve?: boolean;
+  config?: LoopConfig;
+}
+
+// Operator-authored goal loop: starts in `draft` (nothing running). The Referee binds it
+// later and proposes acceptance criteria.
+export function createDraftLoop(opts: CreateDraftLoopOpts): Loop {
+  return createLoop({
+    kind: "goal",
+    label: opts.label,
+    goal: opts.goal,
+    owner_callsign: opts.owner_callsign,
+    owner_sid: opts.owner_sid ?? null,
+    auto_approve: opts.auto_approve,
+    config: opts.config,
+    status: "draft",
+  });
+}
+
+// Bind a draft loop to a Referee: ownership transfers operator→Referee and the loop moves
+// draft→awaiting_approval (the caller opens the criteria gate). The operator keeps the
+// fleet_loop_admin_stop override regardless of owner. Throws unless the loop is a draft.
+export function bindLoopToReferee(id: string, refereeCallsign: string, refereeSid?: string | null): Loop {
+  const loop = getLoop(id);
+  if (!loop) throw new Error(`Loop "${id}" not found`);
+  if (loop.status !== "draft") throw new Error(`Loop "${id}" is ${loop.status}, not draft — cannot bind`);
+  db.prepare(
+    "UPDATE loops SET owner_callsign = ?, owner_sid = ?, status = 'awaiting_approval', updated_at = ? WHERE id = ?",
+  ).run(refereeCallsign, refereeSid ?? null, Date.now(), id);
+  return getLoop(id) as Loop;
+}
+
+// Approve the criteria gate: persist the (possibly operator-edited) acceptance criteria,
+// mirror its numeric guardrails into config.evaluator_optimizer so the existing verdict
+// engine trips on them, and move awaiting_approval→running. Throws unless awaiting_approval.
+export function applyAcceptanceCriteria(id: string, criteria: AcceptanceCriteria): Loop {
+  const loop = getLoop(id);
+  if (!loop) throw new Error(`Loop "${id}" not found`);
+  if (loop.status !== "awaiting_approval") {
+    throw new Error(`Loop "${id}" is ${loop.status}, not awaiting_approval — cannot apply criteria`);
+  }
+  const config: LoopConfig = {
+    ...loop.config,
+    evaluator_optimizer: {
+      ...(loop.config.evaluator_optimizer ?? {}),
+      ...(criteria.completeness_target !== undefined ? { completeness_target: criteria.completeness_target } : {}),
+      ...(criteria.plateau !== undefined ? { plateau: criteria.plateau } : {}),
+    },
+  };
+  db.prepare(
+    "UPDATE loops SET acceptance_criteria = ?, config = ?, status = 'running', updated_at = ? WHERE id = ?",
+  ).run(JSON.stringify(criteria), JSON.stringify(config), Date.now(), id);
+  return getLoop(id) as Loop;
+}
+
+// Reject-and-regenerate: send an awaiting_approval loop back to draft so the Referee can
+// re-propose criteria. Throws unless awaiting_approval.
+export function revertLoopToDraft(id: string): Loop {
+  const loop = getLoop(id);
+  if (!loop) throw new Error(`Loop "${id}" not found`);
+  if (loop.status !== "awaiting_approval") {
+    throw new Error(`Loop "${id}" is ${loop.status}, not awaiting_approval — cannot revert`);
+  }
+  db.prepare("UPDATE loops SET status = 'draft', updated_at = ? WHERE id = ?").run(Date.now(), id);
+  return getLoop(id) as Loop;
+}
+
+// Link the loop to the Plan it delegates to (append-wave model). Today the only caller is
+// the bind path (loop in awaiting_approval): the Referee creates the Plan first, then binds
+// the loop with that project_id. A TERMINAL loop (stopped/completed) is rejected — linking a
+// plan to a finished loop is meaningless and a silent overwrite. (A post-running link route
+// is proposed backlog, not wired here.)
+export function setLoopProject(id: string, projectId: string): Loop {
+  const loop = getLoop(id);
+  if (!loop) throw new Error(`Loop "${id}" not found`);
+  if (loop.status === "stopped" || loop.status === "completed") {
+    throw new Error(`Loop "${id}" is ${loop.status} — cannot set its project`);
+  }
+  db.prepare("UPDATE loops SET project_id = ?, updated_at = ? WHERE id = ?").run(projectId, Date.now(), id);
+  return getLoop(id) as Loop;
 }
 
 function ring(arr: number[] | string[], v: number | string): void {
@@ -381,6 +518,11 @@ export function tickLoop(id: string, input: TickInput): TickResult {
     }
     if (loop.status === "stopped" || loop.status === "completed") {
       return { continue: false, stop_reason: loop.stop_reason ?? undefined };
+    }
+    // Item 2 (loop-goal): pre-run states never advance — a draft has no criteria yet, and
+    // an awaiting_approval loop is held at the criteria gate until the operator approves.
+    if (loop.status === "draft" || loop.status === "awaiting_approval") {
+      return { continue: false, stop_reason: undefined };
     }
 
     const state = loop.state;

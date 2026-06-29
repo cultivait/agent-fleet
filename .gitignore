@@ -5,8 +5,7 @@ dist/
 .claude/settings.local.json
 .claude/worktrees/
 .cursor/mcp.json
-docs/*
-!docs/dual-instance-protocol.md
+docs/
 *.db
 *.db-wal
 *.db-shm

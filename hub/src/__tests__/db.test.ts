@@ -162,7 +162,7 @@ describe("messages", () => {
   });
 
   it("should NOT prune #all — every message is retained (never-delete model)", () => {
-    // #all used to hard-delete past 200 (ALL_CHANNEL_MAX). #all now joins
+    // #all used to hard-delete past 200 (ALL_CHANNEL_MAX). Per Operator, #all now joins
     // the never-delete model: the 16h filter-on-read keeps the live view lean while
     // the full history stays in the DB and is retrievable via GET /messages.
     for (let i = 0; i < 210; i++) {

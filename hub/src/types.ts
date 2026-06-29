@@ -24,6 +24,11 @@ export interface Message {
   // messages that merely claim a reserved sender name. Rendered as [principal]
   // by the MCP tools so instances can act on it as in-session authorization.
   principal?: boolean;
+  // Item 1 (fleet_dm): true only on a point-to-point direct message. Set on the
+  // in-memory queued copy delivered to the recipient so the MCP client can render it
+  // as a DM (not a channel message). DMs are stored in the separate dm_messages table
+  // (never the messages table) and never fan out to a channel — see router.sendDm.
+  dm?: boolean;
   // C1: monotonic per-channel sequence number — assigned by routeMessage at send
   // time so recipients can detect supersession (a later message on the same
   // channel always has a higher seq than an earlier one). Lives in both the
@@ -50,7 +55,7 @@ export interface User {
   // routeMessage's principal stamp on this user's /send messages. Never derived
   // from a client-supplied body — the server is the sole source of this flag.
   isPrincipal: boolean;
-  // Operator presence: true only for the persistent operator identity,
+  // Operator presence: true only for the persistent operator identity ("Operator"),
   // bootstrapped server-side at hub start. A persistent user is a VIRTUAL presence
   // (no live Claude session backing it), so it is EXEMPT from the ghost-reaper /
   // kick-all (which exist to clear dead sessions). Distinct from isPrincipal: the

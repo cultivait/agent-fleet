@@ -4,11 +4,10 @@ import { initGeneralChannel, joinChannel, resetChannelState } from "../channels.
 import { dbCreateChannel, initDB } from "../db.js";
 import { ensureQueue, pendingCounts, resetRouterState, routeMessage } from "../router.js";
 
-// OPERATOR-PING-ALL: a message from the HUMAN OPERATOR wakes ALL members of
-// the channel as if each were @-mentioned — so the operator never has to @-mention. The
+// OPERATOR-PING-ALL: a message from the HUMAN OPERATOR (Operator) wakes ALL members of
+// the channel as if each were @-mentioned — so Operator never has to @-mention. The
 // trigger is the SERVER-VERIFIED principal flag (C3, set on the routeMessage call by
-// the verified send path) AND a reserved operator callsign (the literal "operator" or
-// the configured operator name).
+// the verified send path) AND a reserved operator callsign ∈ {operator, operator}.
 // The REFEREE is principal too but is EXCLUDED (keeps @all quiet). Normal agents and
 // the referee retain their existing mention semantics. The wake signal is the
 // per-recipient `counts` from pendingCounts() — a member is woken iff its callsign is
@@ -35,7 +34,7 @@ beforeEach(() => {
 });
 
 describe("operator-ping-all (verified principal + reserved operator callsign)", () => {
-  it("wakes EVERY channel member (except sender) when the operator sends with no @-mention", () => {
+  it("wakes EVERY channel member (except sender) when operator sends with no @-mention", () => {
     setupChannel(TEAM, ["operator", "alice", "bob", "carol"]);
 
     const msg = routeMessage("operator", "@all", "standup in 5", TEAM, undefined, true);
@@ -64,7 +63,7 @@ describe("operator-ping-all (verified principal + reserved operator callsign)", 
   it("matches the operator callsign case-insensitively (normalized)", () => {
     setupChannel(TEAM, ["alice", "bob"]);
 
-    // admin-send may default from='Operator' (capitalized) — normalization must still trigger.
+    // Operator's admin-send defaults from='Operator' — normalization must still trigger.
     routeMessage("Operator", "@all", "go", TEAM, undefined, true);
 
     const { counts } = pendingCounts();
@@ -72,7 +71,7 @@ describe("operator-ping-all (verified principal + reserved operator callsign)", 
     expect(counts.bob).toBe(1);
   });
 
-  it("pings ALL members even when the operator directs the message to one @target", () => {
+  it("pings ALL members even when operator directs the message to one @target", () => {
     setupChannel(TEAM, ["operator", "alice", "bob", "carol"]);
 
     routeMessage("operator", "@alice", "psst, everyone see this", TEAM, undefined, true);
@@ -142,7 +141,7 @@ describe("operator-ping-all exclusions (referee, normal agents, forgery)", () =>
     expect(counts.bob ?? 0).toBe(0);
   });
 
-  it("FORGERY GUARD: an operator callsign WITHOUT the verified principal flag does NOT ping-all", () => {
+  it("FORGERY GUARD: a operator callsign WITHOUT the verified principal flag does NOT ping-all", () => {
     setupChannel(TEAM, ["operator", "alice", "bob"]);
 
     // principal omitted (not server-verified) → must fall back to normal semantics

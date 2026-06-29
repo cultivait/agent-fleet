@@ -215,6 +215,28 @@ export class HubClient {
     return res.data;
   }
 
+  // Item 1 (fleet_dm): point-to-point direct message. Mirrors send() but hits /dm and
+  // carries no channel — the hub delivers it only to the recipient's queue.
+  async dm(
+    token: string,
+    to: string,
+    content: string,
+    image?: { data: string; mimeType: string },
+  ): Promise<{ id: string; to: string }> {
+    const body: { to: string; content: string; image?: { data: string; mimeType: string } } = { to, content };
+    if (image) body.image = image;
+    const res = await this.request<{ id: string; to: string }>({
+      method: "POST",
+      path: "/dm",
+      token,
+      body,
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "DM failed");
+    }
+    return res.data;
+  }
+
   // ── Loop governor (Phase 1) ──────────────────────────────────────────────────
   async loopCreate(
     token: string,
@@ -331,6 +353,53 @@ export class HubClient {
     return res.data;
   }
 
+  // Item 2 (loop-goal): operator authors a draft goal loop (admin-token).
+  async loopAdminCreateDraft(
+    adminToken: string,
+    body: { label?: string; goal: string; auto_approve?: boolean },
+  ): Promise<unknown> {
+    const res = await this.request<unknown>({
+      method: "POST",
+      path: "/loop-admin-create-draft",
+      token: adminToken,
+      body,
+    });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop create-draft failed");
+    }
+    return res.data;
+  }
+
+  // Item 2 (loop-goal): a Referee binds a draft loop + proposes acceptance criteria.
+  async loopBind(
+    token: string,
+    body: {
+      id: string;
+      criteria: { rubric: string; completeness_target?: number; plateau?: { window: number; epsilon: number } };
+      project_id?: string;
+    },
+  ): Promise<unknown> {
+    const res = await this.request<unknown>({ method: "POST", path: "/loop-bind", token, body });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Loop bind failed");
+    }
+    return res.data;
+  }
+
+  // Item 3 (+Referee dialog): the spawned referee reads (one-shot consumes) its launch
+  // assignment {channel, builder_count, loop_id}, or null if there's no pending spec.
+  async refereeSpec(
+    token: string,
+  ): Promise<{ spec: { id: string; channel: string; builder_count: number; loop_id: string | null } | null }> {
+    const res = await this.request<{
+      spec: { id: string; channel: string; builder_count: number; loop_id: string | null } | null;
+    }>({ method: "GET", path: "/referee-spec", token });
+    if (res.status !== 200) {
+      throw new Error((res.data as { error?: string }).error ?? "Referee-spec fetch failed");
+    }
+    return res.data;
+  }
+
   async poll(token: string): Promise<{
     messages: Array<{
       id: string;
@@ -341,6 +410,7 @@ export class HubClient {
       timestamp: number;
       image?: { data: string; mimeType: string };
       principal?: boolean;
+      dm?: boolean;
     }>;
   } | null> {
     const res = await this.request<{
@@ -377,6 +447,7 @@ export class HubClient {
       timestamp: number;
       image?: { data: string; mimeType: string };
       principal?: boolean;
+      dm?: boolean;
     }>;
   }> {
     const res = await this.request<{

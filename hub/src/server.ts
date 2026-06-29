@@ -31,6 +31,7 @@ import {
   joinChannel,
   leaveChannel,
   removeChannel,
+  renameChannel,
 } from "./channels.js";
 import { STALL_BEAT_MS } from "./constants.js";
 import { getDashboardHTML } from "./dashboard.js";
@@ -46,11 +47,17 @@ import {
   dbDeleteChannelMessages,
   dbDeletePendingAck,
   dbDeleteReadCursorsForChannel,
+  dbRenameChannel,
   dbGetAgentConfig,
   dbGetBoardEntry,
   dbGetChannel,
   dbGetChannelMessages,
+  dbConsumeRefereeSpec,
+  dbCreateRefereeSpec,
   dbGetChannelMessagesBefore,
+  dbGetDmHistory,
+  dbListDmThreads,
+  dmPair,
   dbGetPendingAck,
   dbGetRecentMessages,
   dbGetRegistryCallsign,
@@ -116,11 +123,17 @@ import {
   listTasksByProject,
 } from "./plan/store.js";
 import {
+  type AcceptanceCriteria,
+  applyAcceptanceCriteria,
+  bindLoopToReferee,
+  createDraftLoop,
   createLoop,
   getLoop,
   listLoops,
   pauseLoop,
   resumeLoop,
+  revertLoopToDraft,
+  setLoopProject,
   stopLoop,
   submitVerdict,
   tickLoop,
@@ -135,6 +148,7 @@ import {
   getApproval,
   getPendingApprovalForLoop,
   listApprovals,
+  openCriteriaGate,
   resolveApproval,
   type ApprovalStatus,
 } from "./loops/approvals.js";
@@ -145,16 +159,25 @@ import {
   hasOpenPoll,
   isOnline,
   onPollDisconnect,
+  reconcileRejoinDuplicates,
   removePoll,
   setOffline,
   setOnline,
   touchLastSeen,
 } from "./polling.js";
-import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, peekQueue, pendingCounts, removeQueue, routeMessage } from "./router.js";
-import { consumeTerminalTicket, mintTerminalTicket, TerminalSession, ticketFromUpgrade } from "./terminal.js";
-import type { RegisterRequest, RegistryEntry, RouteHandler, SendRequest, UserRole } from "./types.js";
+import { drainQueue, enqueueAndDeliver, ensureQueue, notifyBridges, peekQueue, pendingCounts, removeQueue, routeMessage, sendDm } from "./router.js";
+import {
+  compactAgent,
+  consumeTerminalTicket,
+  deriveTmuxSession,
+  mintTerminalTicket,
+  TerminalSession,
+  ticketFromUpgrade,
+} from "./terminal.js";
+import type { MessageImage, RegisterRequest, RegistryEntry, RouteHandler, SendRequest, UserRole } from "./types.js";
 import {
   conductorStatus,
+  launchBuilders,
   launchReferee,
   startConductor,
   stopConductor,
@@ -189,32 +212,50 @@ function sendError(res: ServerResponse, status: number, message: string): void {
 // These names are still registerable via the admin-token path (/admin-send
 // auto-registers the sender, and a future /admin-register endpoint can too).
 // Stored lowercase so the check is case- and whitespace-insensitive, preventing
-// look-alike registrations (" operator ", "REFEREE", etc.).
-const RESERVED_NAMES = new Set(["operator", "referee"]);
+// look-alike registrations ("OPERATOR", " operator ", etc.).
+const RESERVED_NAMES = new Set(["operator", "operator", "referee"]);
 
-// The canonical persistent operator identity. The configured operator name is the
-// de-facto operator name across the hub (admin-send's default `from`, the kick-all
+// System channels that must NEVER be DELETED — the global #all plus the two standing
+// fleet channels. Enforced server-side (the cockpit also hides the control, but THIS
+// guard is the real boundary: a hand-rolled admin request can reach the endpoint
+// directly). Matched on the exact canonical name.
+const RESERVED_CHANNELS = new Set(["#all", "#Agent Radio", "#Reserved"]);
+
+// RENAME is narrower than delete: per the v1.11 brief every channel except #all is
+// renamable, so only #all — the universal default channel every member belongs to —
+// is unrenamable (as rename source or target). The other system channels remain
+// undeletable (RESERVED_CHANNELS) but may be renamed.
+const UNRENAMABLE_CHANNELS = new Set(["#all"]);
+
+// Channel names are rendered into the operator's cockpit via innerHTML in several
+// places (the channel list + channel-event system messages), and an agent can
+// create channels on the join-token path — so a name carrying HTML would be a
+// STORED-XSS vector against the operator. Constrain every NEW name (create + the
+// rename target) to a safe charset: letters, digits, space, underscore, hyphen,
+// after the leading '#', 1–64 chars. This neutralizes the class at the source —
+// no stored channel name can contain "<", ">", "&", quotes. (The pre-existing
+// reserved channels like "#Reserved" predate this rule and are hard-guarded
+// against rename/delete, so they never flow through here.)
+const CHANNEL_NAME_RE = /^#[A-Za-z0-9 _-]{1,64}$/;
+function isValidChannelName(name: string): boolean {
+  return CHANNEL_NAME_RE.test(name);
+}
+
+// The canonical persistent operator identity. "Operator" is already the de-facto
+// operator name across the hub (admin-send's default `from`, the kick-all
 // exemption, and the read-cursor surfaces all key on it), so the persistent
-// presence reuses it. Overridable for non-default deployments via AF_OPERATOR_NAME;
-// the default keeps it consistent with those existing operator-name surfaces.
+// presence reuses it. Overridable for non-default deployments, but the default
+// keeps it consistent with those existing literal-"Operator" surfaces.
 const OPERATOR_NAME = (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator";
 
-// Network bind host for the hub's HTTP/WS listener. Defaults to localhost-only
-// (127.0.0.1) — the hub is NOT reachable off-box unless this is set explicitly.
-// Opting into a non-localhost bind (e.g. a Tailscale IP, or 0.0.0.0) lets Tier-2
-// clients on other machines join; the join token is then the only gate, so prefer
-// a Tailscale/Cloudflare tunnel over raw 0.0.0.0 on untrusted networks. See
-// .env.example ([multi-node] AGENT_FLEET_BIND_HOST).
-const BIND_HOST = (process.env.AGENT_FLEET_BIND_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
-
-// Bootstrap (and re-assert) the persistent operator presence. Called from
+// Bootstrap (and re-assert) the persistent operator presence "Operator". Called from
 // the production entrypoint (index.ts) AFTER initDB so the operator is always a
 // valid mention/recipient target, queues messages addressed to it, and is exempt
 // from the ghost-reaper / kick-all. Idempotent: safe to call repeatedly and on a
-// hub already carrying an operator auto-registered by /admin-send — it only (re)asserts
+// hub already carrying a Operator auto-registered by /admin-send — it only (re)asserts
 // the principal + persistent capability, online presence, and #all membership.
 // On FIRST registration it rehydrates the in-memory queue from the durable
-// messages table so a hub restart does not drop messages addressed to the operator.
+// messages table so a hub restart does not drop messages addressed to Operator.
 //
 // Returns the operator's token (callers generally ignore it; the cockpit reads the
 // operator inbox via the admin-token surface, not this token).
@@ -224,7 +265,7 @@ export function ensureOperatorPresence(name: string = OPERATOR_NAME): string {
     registerUser(name);
   }
   // Re-assert capabilities every call (a prior /admin-send auto-register would have
-  // created a NON-principal, NON-persistent, reapable operator — promote it here).
+  // created a NON-principal, NON-persistent, reapable Operator — promote it here).
   setPrincipal(name, true);
   setPersistent(name, true);
   ensureQueue(name);
@@ -239,7 +280,7 @@ export function ensureOperatorPresence(name: string = OPERATOR_NAME): string {
   touchLastSeen(name);
 
   if (firstRegistration) {
-    // Restore anything addressed to the operator that had not yet been read before a restart.
+    // Restore anything addressed to Operator that he had not yet read before a restart.
     const pending = dbGetUnreadMessagesTo(name);
     for (const msg of pending) {
       // The DB row carries no `mentions` column; a direct send (to == name) is by
@@ -270,11 +311,11 @@ const handleRegister: RouteHandler = async (req, res) => {
     // Durable identity: a re-join of an already-registered callsign TAKES OVER the
     // slot — newest claimant wins — instead of the old 409 "already registered" wall
     // that forced a manual /kick before a dropped-but-alive session could reclaim its
-    // own name (the other half of the operator's "constantly rejoin" pain). A matching
+    // own name (the other half of Operator's "constantly rejoin" pain). A matching
     // oldToken is the clean-reconnect fast path; a missing/wrong one no longer blocks
     // the reclaim. Safe here: the join token is shared across the trusted single-
     // operator fleet, and this mirrors admin-register's oldName shed. Reserved
-    // operator names are already rejected above, so this never reseats the operator/REFEREE.
+    // operator names are already rejected above, so this never reseats Operator/REFEREE.
     if (isUserRegistered(body.name)) {
       const existingToken = getUserToken(body.name);
       const cleanReconnect = body.oldToken != null && body.oldToken === existingToken;
@@ -409,6 +450,33 @@ const handleInbox: RouteHandler = async (_req, res, userName) => {
   sendJson(res, 200, { messages });
 };
 
+// Item 1 (fleet_dm): point-to-point direct message. Join-token authed (like /send).
+// Delivery is sendDm — enqueue ONLY to the recipient + persist to dm_messages; no
+// channel, no fan-out, no messages-table write. A `dm` SSE event surfaces it in the
+// operator's cockpit pane (agent-invisible). 404 if the recipient is not connected.
+const handleDm: RouteHandler = async (req, res, userName) => {
+  const body = JSON.parse(await readBody(req)) as { to?: string; content?: string; image?: MessageImage };
+  if (!body.to || (!body.content && !body.image)) {
+    return sendError(res, 400, "Missing 'to' or 'content' field");
+  }
+  try {
+    const message = sendDm(userName!, body.to, body.content || "", body.image);
+    broadcast({
+      type: "dm",
+      from: message.from,
+      to: message.to,
+      pair: dmPair(message.from, message.to),
+      content: message.content,
+      timestamp: message.timestamp,
+      image: message.image,
+    });
+    console.log(`[dm] ${userName} -> ${message.to}${body.image ? " [+image]" : ""}`);
+    sendJson(res, 200, { id: message.id, to: message.to });
+  } catch (e) {
+    sendError(res, 404, (e as Error).message);
+  }
+};
+
 // === C1: /ack — clear a pending_ack row and wake the blocked sender ===
 const handleAck: RouteHandler = async (req, res, userName) => {
   const body = JSON.parse(await readBody(req)) as { msg_id?: string };
@@ -499,9 +567,9 @@ const handleKick: RouteHandler = async (req, res) => {
 };
 
 const handleKickAll: RouteHandler = async (_req, res) => {
-  // Keep the operator-name skip for back-compat AND exempt any persistent operator
+  // Keep the literal "Operator" skip for back-compat AND exempt any persistent operator
   // presence — kick-all clears live agents, never the virtual operator identity.
-  const agents = [...getRegisteredUsers()].filter((name) => name !== OPERATOR_NAME && !isPersistentUser(name));
+  const agents = [...getRegisteredUsers()].filter((name) => name !== "Operator" && !isPersistentUser(name));
   for (const name of agents) {
     kickUser(name);
   }
@@ -577,7 +645,7 @@ const handleAdminSend: RouteHandler = async (req, res) => {
 //      the auto-joined callsign the agent registered under before the rename.
 //   4. registerUser(name, role); mark the new user as a principal when
 //      `principal===true` OR when the name is a RESERVED_NAME (operator identity
-//      — "operator"/"referee" are always principals so their /send
+//      — "operator"/"operator"/"referee" are always principals so their /send
 //      messages stamp principal:true without the caller having to remember the
 //      flag).
 //   5. if `sid` provided, dbStampRegistryCallsign(sid, name) to align the
@@ -653,7 +721,7 @@ const handleAdminRegister: RouteHandler = async (req, res) => {
 // itself to REFEREE *only when the seat is empty* — so a killed referee's natural
 // successor can take over without the admin token. The target name is HARDCODED to
 // REFEREE: the endpoint takes no name parameter, so there is no path here to mint
-// the operator identity. The vacancy check and registration run in ONE synchronous critical
+// operator/operator. The vacancy check and registration run in ONE synchronous critical
 // section (no `await` after readBody) so, under Node's single thread, two concurrent
 // claims on a vacant seat resolve to exactly one winner.
 const handleClaimReferee: RouteHandler = async (req, res, userName) => {
@@ -713,6 +781,9 @@ const handleChannelCreate: RouteHandler = async (req, res, userName) => {
     return sendError(res, 400, "Missing or invalid 'name' field");
   }
   const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
+  if (!isValidChannelName(channelName)) {
+    return sendError(res, 400, "Channel name may contain only letters, digits, spaces, _ and - (1-64 chars)");
+  }
   if (dbGetChannel(channelName)) {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
@@ -851,6 +922,9 @@ const handleAdminChannelCreate: RouteHandler = async (req, res) => {
     return sendError(res, 400, "Missing or invalid 'name' field");
   }
   const channelName = body.name.startsWith("#") ? body.name : `#${body.name}`;
+  if (!isValidChannelName(channelName)) {
+    return sendError(res, 400, "Channel name may contain only letters, digits, spaces, _ and - (1-64 chars)");
+  }
   if (dbGetChannel(channelName)) {
     return sendError(res, 409, `Channel "${channelName}" already exists`);
   }
@@ -879,13 +953,28 @@ const handleAdminChannelHistory: RouteHandler = async (req, res) => {
   }
 };
 
+// Item 1 (fleet_dm): operator-only DM audit. /admin-dms lists threads (canonical pair,
+// newest-active first); /admin-dm-history?pair=a|b returns one thread's transcript.
+// Admin-token gated — DMs are an operator oversight record; agents never read them.
+const handleAdminDms: RouteHandler = async (_req, res) => {
+  sendJson(res, 200, { threads: dbListDmThreads() });
+};
+
+const handleAdminDmHistory: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const pair = url.searchParams.get("pair");
+  if (!pair) return sendError(res, 400, "Missing 'pair' query param");
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "200", 10) || 200, 1), 500);
+  sendJson(res, 200, { messages: dbGetDmHistory(pair, limit) });
+};
+
 const handleAdminChannelDelete: RouteHandler = async (req, res) => {
   const body = JSON.parse(await readBody(req)) as { name?: string };
   if (!body.name || typeof body.name !== "string") {
     return sendError(res, 400, "Missing or invalid 'name' field");
   }
-  if (body.name === "#all") {
-    return sendError(res, 400, "Cannot delete #all");
+  if (RESERVED_CHANNELS.has(body.name)) {
+    return sendError(res, 400, `Cannot delete reserved channel "${body.name}"`);
   }
   if (!dbGetChannel(body.name)) {
     return sendError(res, 404, `Channel "${body.name}" not found`);
@@ -897,6 +986,48 @@ const handleAdminChannelDelete: RouteHandler = async (req, res) => {
   broadcast({ type: "channel_delete", name: body.name, timestamp: Date.now() });
   console.log(`[admin-channel-delete] ${body.name}`);
   sendJson(res, 200, { ok: true, channel: body.name });
+};
+
+// Rename a channel. Server-side guard: only #all is unrenamable (neither source nor
+// target) — every other channel, including the standing fleet channels, is renamable.
+// Membership + full message history are preserved (dbRenameChannel re-keys every table
+// in a txn; renameChannel re-keys the in-memory member map synchronously). 404 if
+// `from` is unknown, 409 if `to` already exists.
+const handleAdminChannelRename: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { from?: string; to?: string; name?: string; newName?: string };
+  const fromRaw = typeof body.from === "string" ? body.from : typeof body.name === "string" ? body.name : "";
+  const toRaw = typeof body.to === "string" ? body.to : typeof body.newName === "string" ? body.newName : "";
+  const from = fromRaw.trim();
+  if (!from || !toRaw.trim()) {
+    return sendError(res, 400, "Missing 'from' and 'to' channel names");
+  }
+  const toTrim = toRaw.trim();
+  const to = toTrim.startsWith("#") ? toTrim : `#${toTrim}`;
+  if (UNRENAMABLE_CHANNELS.has(from)) {
+    return sendError(res, 400, `Cannot rename the universal "${from}" channel`);
+  }
+  if (UNRENAMABLE_CHANNELS.has(to)) {
+    return sendError(res, 400, `Cannot rename a channel into the reserved "${to}" name`);
+  }
+  if (from === to) {
+    return sendError(res, 400, "New name is the same as the current name");
+  }
+  if (!isValidChannelName(to)) {
+    return sendError(res, 400, "Channel name may contain only letters, digits, spaces, _ and - (1-64 chars)");
+  }
+  if (!dbGetChannel(from)) {
+    return sendError(res, 404, `Channel "${from}" not found`);
+  }
+  if (dbGetChannel(to)) {
+    return sendError(res, 409, `Channel "${to}" already exists`);
+  }
+  if (!dbRenameChannel(from, to)) {
+    return sendError(res, 500, `Rename failed for "${from}"`);
+  }
+  renameChannel(from, to);
+  broadcast({ type: "channel_rename", from, to, timestamp: Date.now() });
+  console.log(`[admin-channel-rename] ${from} → ${to}`);
+  sendJson(res, 200, { ok: true, from, to });
 };
 
 // Local patch: task board — operator removal of stale/ghost entries.
@@ -930,18 +1061,18 @@ const handleAdminUnreadCounts: RouteHandler = async (_req, res) => {
 };
 
 // Operator inbox: surface the messages queued for the persistent operator presence
-// so the cockpit / admin surface can show what is waiting for the operator without
-// holding a poll. Admin-token gated (adminRoutes).
+// ("Operator") so the cockpit / admin surface can show what is waiting for Operator without
+// him holding a poll. Admin-token gated (adminRoutes).
 //   GET /admin-operator-inbox          → PEEK (non-destructive); returns the queued
-//                                         messages addressed to the operator + queue depth.
-//   GET /admin-operator-inbox?drain=1  → DRAIN: clears the operator's in-memory queue and
-//                                         advances the per-channel read cursor to now
+//                                         messages addressed to Operator + queue depth.
+//   GET /admin-operator-inbox?drain=1  → DRAIN: clears Operator's in-memory queue and
+//                                         advances his per-channel read cursor to now
 //                                         (so /admin-unread-counts resets), then
 //                                         returns the addressed messages that were
 //                                         drained. The full DB transcript is untouched.
-// "addressed" = messages whose `mentions` include the operator (a direct `to:@operator` send or
-// an @operator mention) — the traffic that actually warrants the operator's attention,
-// as opposed to @all chatter merely overheard in the operator's channels.
+// "addressed" = messages whose `mentions` include Operator (a direct `to:@Operator` send or
+// an @Operator mention) — the traffic that actually warrants the operator's attention,
+// as opposed to @all chatter merely overheard in his channels.
 const handleAdminOperatorInbox: RouteHandler = async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const drain = url.searchParams.get("drain") === "1";
@@ -1404,7 +1535,7 @@ export function reapGhostAgents(graceMs: number): string[] {
   const reaped: string[] = [];
   for (const name of getRegisteredUsers()) {
     if (getUserRole(name) === "bridge") continue;
-    // Persistent operator presence is a virtual identity with no session —
+    // Persistent operator presence ("Operator") is a virtual identity with no session —
     // it never holds a poll and would otherwise always look stale. Never reap it.
     if (isPersistentUser(name)) continue;
     if (hasOpenPoll(name)) continue;
@@ -1505,7 +1636,31 @@ const handleSessionRegister: RouteHandler = async (req, res) => {
   // spawn_id; the hub resolves the merged row's callsign). Reconcile the roster in
   // the same pass so a killed agent doesn't linger "online" for the 40min ghost
   // grace — this is the hub half of "kill-ALL = one registry pass".
-  if (entry.status === "signed_off") retirePresenceForCallsign(entry.callsign);
+  if (entry.status === "signed_off") {
+    retirePresenceForCallsign(entry.callsign);
+  } else if (entry.callsign && entry.session_id) {
+    // Reconcile-on-rejoin: a live re-registration retires the stale null-handle ghost rows this
+    // callsign left behind on a previous (regenerated-sid) registration — NOW, not at the next boot
+    // sweep. Conservative + scoped to this callsign (see reconcileRejoinDuplicates). The DB-level
+    // signed_off IS the reap; each retired row is also emitted as registry_update for parity with the
+    // main upsert emit above. (No client handles registry_update yet, so it's a UI no-op today — but
+    // /users dedupes by callsign, so a null-handle ghost was never visible in the roster anyway.)
+    const retired = reconcileRejoinDuplicates(entry.callsign, entry.session_id);
+    for (const g of retired) {
+      broadcast({
+        type: "registry_update",
+        session_id: g.session_id,
+        spawn_id: g.spawn_id,
+        callsign: g.callsign,
+        node: g.node,
+        status: g.status,
+        timestamp: Date.now(),
+      });
+    }
+    if (retired.length > 0) {
+      console.log(`[rejoin-reconcile] ${entry.callsign}: signed_off ${retired.length} stale null-handle ghost row(s)`);
+    }
+  }
   sendJson(res, 200, { ok: true, entry });
 };
 
@@ -1538,11 +1693,7 @@ function isRegistrySessionAlive(entry: RegistryEntry): boolean | null {
       // ESRCH ⇒ pid dead; fall through — tmux may still say alive (restart-under-new-pid).
     }
   }
-  const tmuxSession = entry.control_handle?.startsWith("tmux:")
-    ? entry.control_handle.slice("tmux:".length)
-    : entry.spawn_id
-      ? `wt-${entry.spawn_id}`
-      : null;
+  const tmuxSession = deriveTmuxSession(entry); // one derivation, shared with resolveLiveTmuxSession + the reconcile sites
   if (tmuxSession) {
     const r = spawnSync("tmux", ["has-session", "-t", tmuxSession], { stdio: "ignore" });
     // tmux missing (spawn error / no exit status) → not a readable signal.
@@ -2511,6 +2662,63 @@ const handleLoopAdminStop: RouteHandler = async (req, res) => {
   sendJson(res, 200, { loop: updated });
 };
 
+// ── Item 2 (loop-goal) ────────────────────────────────────────────────────────
+// Operator authors a goal-driven loop (a one-sentence objective). Admin-token gated,
+// mirroring /loop-admin-stop. Starts in `draft`, owned by the operator, nothing running
+// until a Referee binds it and the criteria gate is approved.
+const handleLoopAdminCreateDraft: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { label?: string; goal?: string; auto_approve?: boolean };
+  if (!body.goal || typeof body.goal !== "string" || !body.goal.trim()) {
+    return sendError(res, 400, "Missing or invalid 'goal' field");
+  }
+  const goal = body.goal.trim();
+  const loop = createDraftLoop({
+    label: (body.label?.trim() || goal).slice(0, 80),
+    goal,
+    owner_callsign: OPERATOR_NAME,
+    auto_approve: !!body.auto_approve,
+  });
+  sendJson(res, 200, { loop });
+};
+
+// A Referee binds a draft loop: ownership transfers to the Referee, the loop moves to
+// awaiting_approval, and the Referee's proposed acceptance criteria open as a criteria
+// gate for the operator (or, if the loop's auto_approve toggle is set, the gate is skipped
+// and the loop goes straight to running). Owner-token (protectedRoutes): the Referee is a
+// real session. project_id optionally links the Plan this loop will delegate to.
+const handleLoopBind: RouteHandler = async (req, res, userName) => {
+  // Binding transfers loop OWNERSHIP to the caller (the Referee), so it is principal-gated
+  // — only a referee/operator (a principal member, set via /admin-register) may bind. A
+  // plain member is rejected, mirroring the other referee-identity routes. This closes the
+  // ownership hole where a non-referee + auto_approve could push a loop straight to running.
+  if (!userName || !isPrincipalUser(userName)) {
+    return sendError(res, 403, "Only a referee (principal) may bind a loop");
+  }
+  const body = JSON.parse(await readBody(req)) as { id?: string; criteria?: AcceptanceCriteria; project_id?: string };
+  if (!body.id || typeof body.id !== "string") return sendError(res, 400, "Missing or invalid 'id' field");
+  if (!body.criteria || typeof body.criteria.rubric !== "string" || !body.criteria.rubric.trim()) {
+    return sendError(res, 400, "Missing 'criteria' (must include a non-empty rubric)");
+  }
+  const loop = getLoop(body.id);
+  if (!loop) return sendError(res, 404, `Loop "${body.id}" not found`);
+  const sid = dbGetBoardEntry(userName!)?.sid ?? undefined;
+  try {
+    bindLoopToReferee(body.id, userName!, sid);
+    if (body.project_id) setLoopProject(body.id, body.project_id);
+    let bound = getLoop(body.id);
+    if (loop.auto_approve) {
+      // Trusted repeat run: skip the gate → running.
+      bound = applyAcceptanceCriteria(body.id, body.criteria);
+    } else {
+      const appr = openCriteriaGate(body.id, body.criteria);
+      broadcast({ type: "loop_approval", loop_id: body.id, approval_id: appr.id, status: "pending", timestamp: Date.now() });
+    }
+    sendJson(res, 200, { loop: bound });
+  } catch (e) {
+    sendError(res, 409, (e as Error).message);
+  }
+};
+
 // ── Operator loop visibility + override controls (Phase 2, admin-token) ────────
 // The cockpit holds only the admin token (never a per-session member token), so it
 // reads/controls loops through these admin routes — mirroring /loop-admin-stop:
@@ -2565,6 +2773,7 @@ const handleLoopApprovalResolve: RouteHandler = async (req, res) => {
     decision?: string;
     by?: string;
     note?: string;
+    criteria?: AcceptanceCriteria; // item 2: edit-then-approve on a criteria gate
   };
   if (!body.id || typeof body.id !== "string") {
     return sendError(res, 400, "Missing or invalid 'id' field");
@@ -2579,12 +2788,35 @@ const handleLoopApprovalResolve: RouteHandler = async (req, res) => {
   }
   const decidedBy = body.by ?? "operator";
   const status: ApprovalStatus = body.decision === "approve" ? "approved" : "rejected";
-  // Act on the loop first, then record the decision — so a missing loop fails before we
-  // mark the queue item decided.
-  const loop =
-    body.decision === "approve"
-      ? resumeLoop(approval.loop_id)
-      : stopLoop(approval.loop_id, "external_terminate");
+  // Act on the loop first, then record the decision — so a loop-state error fails before we
+  // mark the queue item decided. The action depends on the gate kind:
+  //   criteria_gate (item 2): approve → apply the (optionally operator-edited) criteria and
+  //     run; reject-and-regenerate → send the loop back to draft for the Referee to re-propose.
+  //   escalation_gate (existing): approve → resume; reject → terminate.
+  let loop;
+  try {
+    if (approval.kind === "criteria_gate") {
+      if (body.decision === "approve") {
+        const criteria = body.criteria ?? approval.criteria;
+        if (!criteria) return sendError(res, 400, "No criteria to approve (none proposed and none provided)");
+        // Re-validate on edit-then-approve (mirror /loop-bind's guard): an operator-edited
+        // bundle must still carry a non-empty rubric — never run a loop on an empty rubric.
+        if (typeof criteria.rubric !== "string" || !criteria.rubric.trim()) {
+          return sendError(res, 400, "Criteria must include a non-empty rubric");
+        }
+        loop = applyAcceptanceCriteria(approval.loop_id, criteria);
+      } else {
+        loop = revertLoopToDraft(approval.loop_id);
+      }
+    } else {
+      loop =
+        body.decision === "approve"
+          ? resumeLoop(approval.loop_id)
+          : stopLoop(approval.loop_id, "external_terminate");
+    }
+  } catch (e) {
+    return sendError(res, 409, (e as Error).message);
+  }
   const resolved = resolveApproval(body.id, status, decidedBy, body.note);
   broadcast({
     type: "loop_approval",
@@ -2656,6 +2888,35 @@ const handleTerminalTicket: RouteHandler = async (req, res) => {
   sendJson(res, 200, { ticket: ticket.token, callsign: ticket.callsign, expiresAt: ticket.expiresAt });
 };
 
+// Operator "Compact" button — type /compact into a target agent's live tmux
+// session (resolved by callsign, verified live). Same browser gate as the cockpit
+// terminal (it lives in adminRoutes). BUTTON-ONLY: the hub never auto-compacts on
+// any threshold — this endpoint is the sole trigger. 409 when the callsign has no
+// live tmux session (Windows agents, stale rows). The /compact-fires-once logic
+// lives in terminal.ts:sendCompactToSession (defeats the slash-menu 2-tries race).
+const handleAdminCompactAgent: RouteHandler = async (req, res) => {
+  const raw = await readBody(req);
+  let body: { callsign?: unknown; name?: unknown };
+  try {
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    return sendError(res, 400, "Invalid JSON body");
+  }
+  const callsign =
+    typeof body.callsign === "string"
+      ? body.callsign.trim()
+      : typeof body.name === "string"
+        ? body.name.trim()
+        : "";
+  if (!callsign) return sendError(res, 400, "callsign is required");
+  const session = await compactAgent(callsign);
+  if (!session) {
+    return sendError(res, 409, `No live tmux session for callsign "${callsign}"`);
+  }
+  console.log(`[admin-compact] ${callsign} → ${session}`);
+  sendJson(res, 200, { ok: true, callsign, session });
+};
+
 const publicRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/users": { method: "GET", handler: handleUsers },
   "/whoami": { method: "GET", handler: handleWhoami },
@@ -2712,6 +2973,43 @@ const handleLaunchReferee: RouteHandler = async (_req, res) => {
   sendJson(res, 200, launchReferee());
 };
 
+// Item 3 (+Referee dialog): sane local ceiling on builders per launch (the dialog labels
+// this; the spawn is N local tmux sessions on the hub host).
+const REFEREE_BUILDER_CAP = 10;
+
+// Dialog submit (admin): store the launch SPEC (channel/builder_count/loop_id), then spawn
+// the referee with its FIXED argv + N generic builders. Params flow via the spec record
+// (read back by the spawned referee), NEVER the launch command line.
+const handleRefereeLaunch: RouteHandler = async (req, res) => {
+  const body = JSON.parse(await readBody(req)) as { channel?: string; builder_count?: number; loop_id?: string };
+  const channel = typeof body.channel === "string" ? body.channel.trim() : "";
+  if (!channel) return sendError(res, 400, "Missing 'channel' field");
+  if (!dbGetChannel(channel)) return sendError(res, 404, `Channel "${channel}" not found`);
+  const rawCount = typeof body.builder_count === "number" ? Math.floor(body.builder_count) : 0;
+  if (rawCount < 0) return sendError(res, 400, "'builder_count' must be >= 0");
+  const builderCount = Math.min(rawCount, REFEREE_BUILDER_CAP);
+  const loopId = typeof body.loop_id === "string" && body.loop_id ? body.loop_id : null;
+  if (loopId) {
+    const loop = getLoop(loopId);
+    if (!loop) return sendError(res, 404, `Loop "${loopId}" not found`);
+    if (loop.status !== "draft") return sendError(res, 409, `Loop "${loopId}" is ${loop.status}, not a draft`);
+  }
+  const spec = dbCreateRefereeSpec(channel, builderCount, loopId);
+  const referee = launchReferee();
+  const builders = launchBuilders(builderCount);
+  sendJson(res, 200, { ok: true, spec, referee, builders });
+};
+
+// The freshly-spawned referee reads (and consumes, one-shot) its assignment. Principal-gated:
+// only a seated referee/operator may claim a spec. Mirrors /inbox's GET-that-drains shape.
+const handleRefereeSpec: RouteHandler = async (_req, res, userName) => {
+  if (!userName || !isPrincipalUser(userName)) {
+    return sendError(res, 403, "Only a referee (principal) may read a launch spec");
+  }
+  const spec = dbConsumeRefereeSpec(userName);
+  sendJson(res, 200, { spec: spec ?? null });
+};
+
 const handleConductorConfig: RouteHandler = async (req, res) => {
   let body: unknown;
   try {
@@ -2756,7 +3054,11 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/admin-register": { method: "POST", handler: handleAdminRegister },
   "/admin-channel-create": { method: "POST", handler: handleAdminChannelCreate },
   "/admin-channel-delete": { method: "POST", handler: handleAdminChannelDelete },
+  "/admin-channel-rename": { method: "POST", handler: handleAdminChannelRename },
   "/admin-channel-history": { method: "GET", handler: handleAdminChannelHistory },
+  // Item 1 (fleet_dm): operator DM audit (list threads + read one thread).
+  "/admin-dms": { method: "GET", handler: handleAdminDms },
+  "/admin-dm-history": { method: "GET", handler: handleAdminDmHistory },
   "/admin-board-delete": { method: "POST", handler: handleAdminBoardDelete },
   "/admin-mark-read": { method: "POST", handler: handleAdminMarkRead },
   "/admin-unread-counts": { method: "GET", handler: handleAdminUnreadCounts },
@@ -2769,6 +3071,8 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/admin-task-force": { method: "POST", handler: handleAdminTaskForce },
   // Operator Control Panel (WS-B)
   "/admin-launch-referee": { method: "POST", handler: handleLaunchReferee },
+  // Item 3 (+Referee dialog): store launch spec + spawn referee + N builders.
+  "/admin-referee-launch": { method: "POST", handler: handleRefereeLaunch },
   "/admin-conductor-config": { method: "POST", handler: handleConductorConfig },
   "/admin-conductor-status": { method: "GET", handler: handleConductorStatus },
   "/admin-conductor-start": { method: "POST", handler: handleConductorStart },
@@ -2783,6 +3087,8 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/admin-project-delete": { method: "POST", handler: handleProjectDelete },
   // Loop governor — operator force-stop: terminate any loop regardless of owner.
   "/loop-admin-stop": { method: "POST", handler: handleLoopAdminStop },
+  // Item 2 (loop-goal): operator authors a draft goal loop (admin-gated, mirrors -stop).
+  "/loop-admin-create-draft": { method: "POST", handler: handleLoopAdminCreateDraft },
   // Loop governor — operator visibility + override (cockpit, Phase 2): admin-token
   // read of all loops + override pause/resume (no owner check), same guard as -stop.
   "/loop-admin-list": { method: "GET", handler: handleLoopAdminList },
@@ -2793,12 +3099,15 @@ const adminRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/loop-approval-resolve": { method: "POST", handler: handleLoopApprovalResolve },
   // Interactive terminal — mint a single-use WS ticket for a callsign's tmux session.
   "/terminal-ticket": { method: "POST", handler: handleTerminalTicket },
+  // Operator "Compact" button — type /compact into a callsign's live tmux session.
+  "/admin-compact-agent": { method: "POST", handler: handleAdminCompactAgent },
 };
 
 const protectedRoutes: Record<string, { method: string; handler: RouteHandler }> = {
   "/send": { method: "POST", handler: handleSend },
   "/poll": { method: "GET", handler: handlePoll },
   "/inbox": { method: "GET", handler: handleInbox },
+  "/dm": { method: "POST", handler: handleDm },
   "/ack": { method: "POST", handler: handleAck },
   "/unregister": { method: "POST", handler: handleUnregister },
   "/claim-referee": { method: "POST", handler: handleClaimReferee },
@@ -2811,6 +3120,10 @@ const protectedRoutes: Record<string, { method: string; handler: RouteHandler }>
   // Loop governor — owner-authenticated (per-session token). pause/resume/stop
   // additionally enforce caller === owner inside the handler.
   "/loop-create": { method: "POST", handler: handleLoopCreate },
+  // Item 2 (loop-goal): a Referee binds a draft loop + proposes acceptance criteria.
+  "/loop-bind": { method: "POST", handler: handleLoopBind },
+  // Item 3 (+Referee dialog): the spawned referee reads (consumes) its launch spec.
+  "/referee-spec": { method: "GET", handler: handleRefereeSpec },
   "/loop-tick": { method: "POST", handler: handleLoopTick },
   "/loop-verdict": { method: "POST", handler: handleLoopVerdict },
   "/loop-pause": { method: "POST", handler: handleLoopPause },
@@ -2833,7 +3146,7 @@ function authenticateBearer(req: IncomingMessage, expected: string): boolean {
 const STALE_GRACE_MS = 30_000; // 30 seconds before auto-unregister
 const staleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-// Operator directive: agents leave the roster ONLY on a manual /kick (or a voluntary
+// Operator's directive: agents leave the roster ONLY on a manual /kick (or a voluntary
 // fleet_disconnect) — NEVER via automatic staleness/crash eviction, so piloting the
 // fleet from one platform doesn't mean constantly re-joining quiet agents. When on
 // (the default), the three auto-eviction paths are neutered: the 60s ghost-reaper
@@ -2957,7 +3270,7 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     // Break-glass recovery: the real admin token always passes the browser gate
     // so an operator can still reach the cockpit (and have it mint a scoped
     // token) if CF Access config misfires — fail-closed would otherwise 403
-    // everyone, the operator included. The admin token is NEVER embedded in the served
+    // everyone, Operator included. The admin token is NEVER embedded in the served
     // page (A3-a), so this opens no anonymous path: only a holder of the secret
     // admin token can use it.
     if (authenticateBearer(req, adminToken)) return true;
@@ -2994,10 +3307,8 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
           "Cache-Control": "no-cache, no-store, must-revalidate",
         });
         // A3-a: embed a freshly-minted scoped cockpit token, NOT the raw admin
-        // token. The raw admin token never reaches the browser. Also thread the
-        // configured operator name so the dashboard tags operator messages without
-        // a hardcoded handle.
-        res.end(getDashboardHTML(mintCockpitToken(), OPERATOR_NAME));
+        // token. The raw admin token never reaches the browser.
+        res.end(getDashboardHTML(mintCockpitToken()));
       }).catch(() => {
         sendError(res, 403, "Forbidden");
       });
@@ -3186,14 +3497,8 @@ export function createHubServer(port: number, adminToken: string, joinToken: str
     }
     throw err;
   });
-  server.listen(port, BIND_HOST, () => {
+  server.listen(port, "127.0.0.1", () => {
     console.log(`Agent Fleet Hub listening on http://localhost:${port}`);
-    // LOUD one-time guardrail: a non-localhost bind exposes the hub off-box.
-    if (!["127.0.0.1", "::1", "localhost"].includes(BIND_HOST)) {
-      console.warn(
-        `[agent-fleet] WARNING: Hub now reachable on ${BIND_HOST}:${port}. The join token is the only gate — prefer a Tailscale/Cloudflare tunnel over raw 0.0.0.0 on untrusted networks.`,
-      );
-    }
   });
   return server;
 }

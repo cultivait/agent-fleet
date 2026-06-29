@@ -17,20 +17,27 @@ import { randomUUID } from "node:crypto";
 
 // Verdict comes from the canonical acyclic leaf (loops/verdict.ts), NOT store.ts — keeps the
 // dep graph acyclic: verdict.ts ← approvals.ts ← store.ts (store also imports verdict.ts).
-import type { Verdict } from "./verdict.js";
+import type { AcceptanceCriteria, Verdict } from "./verdict.js";
 
 export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+// Item 2 (loop-goal): distinguishes a PRE-RUN criteria gate (operator approves the
+// Referee's proposed acceptance criteria before the loop runs) from the original in-run
+// escalation gate (a running loop's verifier returned "escalate"). Same queue + widget.
+export type ApprovalKind = "escalation_gate" | "criteria_gate";
 
 export interface ApprovalRow {
   id: string;
   loop_id: string;
   reason: string;
-  verdict: string | null; // JSON-encoded Verdict snapshot
+  verdict: string | null; // JSON-encoded Verdict snapshot (escalation gate)
   status: ApprovalStatus;
   created_at: number;
   decided_at: number | null;
   decided_by: string | null;
   note: string | null;
+  kind: string; // Item 2: 'escalation_gate' (default) | 'criteria_gate'
+  criteria: string | null; // Item 2: JSON AcceptanceCriteria proposed on a criteria_gate
 }
 
 // Parsed view returned to callers (verdict decoded).
@@ -44,6 +51,8 @@ export interface Approval {
   decided_at: number | null;
   decided_by: string | null;
   note: string | null;
+  kind: ApprovalKind;
+  criteria: AcceptanceCriteria | null;
 }
 
 let db: Database.Database;
@@ -60,11 +69,23 @@ export function initApprovalSchema(database: Database.Database): void {
       created_at INTEGER NOT NULL,
       decided_at INTEGER,
       decided_by TEXT,
-      note TEXT
+      note TEXT,
+      kind TEXT NOT NULL DEFAULT 'escalation_gate',
+      criteria TEXT
     )
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_loop_approvals_status ON loop_approvals (status)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_loop_approvals_loop ON loop_approvals (loop_id)`);
+
+  // Item 2 (loop-goal): forward-compat for DBs created before the criteria-gate columns
+  // existed (same guarded-ALTER idiom as the loops table).
+  for (const col of ["kind TEXT NOT NULL DEFAULT 'escalation_gate'", "criteria TEXT"]) {
+    try {
+      db.exec(`ALTER TABLE loop_approvals ADD COLUMN ${col}`);
+    } catch {
+      /* column already exists */
+    }
+  }
 }
 
 function genId(): string {
@@ -82,6 +103,8 @@ function parseRow(row: ApprovalRow): Approval {
     decided_at: row.decided_at,
     decided_by: row.decided_by,
     note: row.note,
+    kind: (row.kind as ApprovalKind) ?? "escalation_gate",
+    criteria: row.criteria ? (JSON.parse(row.criteria) as AcceptanceCriteria) : null,
   };
 }
 
@@ -103,6 +126,10 @@ export interface CreateApprovalInput {
   loop_id: string;
   reason: string;
   verdict?: Verdict | null;
+  // Item 2 (loop-goal): defaults to "escalation_gate". A "criteria_gate" carries the
+  // Referee's proposed acceptance criteria for the operator to approve/edit/reject.
+  kind?: ApprovalKind;
+  criteria?: AcceptanceCriteria | null;
 }
 
 // Open a pending approval for a loop. Idempotent: if one is already open for the loop,
@@ -113,10 +140,30 @@ export function createApproval(input: CreateApprovalInput): Approval {
   const id = genId();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO loop_approvals (id, loop_id, reason, verdict, status, created_at, decided_at, decided_by, note)
-     VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL)`,
-  ).run(id, input.loop_id, input.reason, input.verdict ? JSON.stringify(input.verdict) : null, now);
+    `INSERT INTO loop_approvals (id, loop_id, reason, verdict, status, created_at, decided_at, decided_by, note, kind, criteria)
+     VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL, ?, ?)`,
+  ).run(
+    id,
+    input.loop_id,
+    input.reason,
+    input.verdict ? JSON.stringify(input.verdict) : null,
+    now,
+    input.kind ?? "escalation_gate",
+    input.criteria ? JSON.stringify(input.criteria) : null,
+  );
   return getApproval(id) as Approval;
+}
+
+// Item 2 (loop-goal): open the PRE-RUN criteria gate carrying the Referee's proposed
+// acceptance bundle. Idempotent per loop (one open gate at a time). The server handler
+// resolves it: approve → applyAcceptanceCriteria (→running), reject → revertLoopToDraft.
+export function openCriteriaGate(loopId: string, criteria: AcceptanceCriteria, reason?: string): Approval {
+  return createApproval({
+    loop_id: loopId,
+    reason: reason ?? "Operator approval of proposed acceptance criteria",
+    kind: "criteria_gate",
+    criteria,
+  });
 }
 
 export function listApprovals(filter?: { status?: ApprovalStatus; loop_id?: string }): Approval[] {

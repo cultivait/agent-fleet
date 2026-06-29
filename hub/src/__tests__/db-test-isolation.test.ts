@@ -11,9 +11,9 @@ import { initDB } from "../db.js";
 const AGENT_FLEET_DB_PATH_AT_LOAD = process.env.AGENT_FLEET_DB_PATH;
 const WALKIE_TALKIE_DB_PATH_AT_LOAD = process.env.WALKIE_TALKIE_DB_PATH;
 
-// A stand-in for the real prod hub store. A test must NEVER open this. The guard
-// throws BEFORE `new Database()`, so naming it here never actually touches it.
-const PROD_DB = "/var/lib/agent-fleet/agent-fleet.db";
+// The real prod hub store. A test must NEVER open this. The guard throws BEFORE
+// `new Database()`, so naming it here never actually touches it.
+const PROD_DB = "/var/lib/storage/agent-fleet/agent-fleet.db";
 
 describe("test DB isolation (regression: suite must never touch the prod store)", () => {
   let af0: string | undefined;

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getUserRole, getUsersByRole, isPersistentUser, isUserRegistered } from "./auth.js";
 import { getChannelMembers, isChannelMember, joinChannel } from "./channels.js";
-import { dbCreatePendingAck, dbNextChannelSeq, dbSaveMessage } from "./db.js";
+import { dbCreatePendingAck, dbInsertDm, dbNextChannelSeq, dbSaveMessage } from "./db.js";
 import { deliverMessage } from "./polling.js";
 import type { Message, MessageImage } from "./types.js";
 
@@ -38,20 +38,13 @@ function resolveMentions(content: string, members: string[]): string[] {
   return [...found];
 }
 
-// Operator-ping-all: a message from the HUMAN OPERATOR addresses EVERY
+// Operator-ping-all: a message from the HUMAN OPERATOR (Operator) addresses EVERY
 // member of the channel, so the operator never has to @-mention. Gated on the
 // SERVER-VERIFIED principal flag (set by the verified send path — never a
 // client-settable field) AND a reserved operator callsign. The referee is also a
 // principal but is intentionally EXCLUDED here so @all stays quiet for it; the
-// referee keeps normal @-mention semantics. The recognized callsigns are the
-// literal "operator" plus the configured operator name (AF_OPERATOR_NAME ??
-// WT_OPERATOR_NAME ?? "Operator"), all matched case-insensitively.
-const OPERATOR_PING_CALLSIGNS = new Set(
-  [
-    "operator",
-    (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator",
-  ].map((n) => n.toLowerCase()),
-);
+// referee keeps normal @-mention semantics.
+const OPERATOR_PING_CALLSIGNS = new Set(["operator", "operator"]);
 function isOperatorPingAll(from: string, principal?: boolean): boolean {
   return principal === true && OPERATOR_PING_CALLSIGNS.has(from.trim().toLowerCase());
 }
@@ -85,7 +78,7 @@ export function drainQueue(name: string): Message[] {
 }
 
 // Non-destructive read of a member's queued messages — used by the operator-inbox
-// admin surface so the cockpit can show what is waiting for the operator without consuming
+// admin surface so the cockpit can show what is waiting for Operator without consuming
 // it (drain still consumes via drainQueue). Returns a copy; never the live array.
 export function peekQueue(name: string): Message[] {
   const queue = messageQueues.get(name);
@@ -153,8 +146,8 @@ export function routeMessage(
   }
 
   if (!isChannelMember(channel, targetName)) {
-    // The persistent operator presence is reachable in EVERY channel, not
-    // just #all — so `fleet_send to:@operator` from any channel resolves instead of
+    // The persistent operator presence ("Operator") is reachable in EVERY channel, not
+    // just #all — so `fleet_send to:@Operator` from any channel resolves instead of
     // throwing "not a member". Lazily join the operator to the channel here; a
     // normal member still gets the not-a-member error.
     if (isPersistentUser(targetName)) {
@@ -205,6 +198,35 @@ export function enqueueAndDeliver(targetName: string, message: Message): void {
   const queue = messageQueues.get(targetName)!;
   queue.push(message);
   deliverMessage(targetName);
+}
+
+// Item 1 (fleet_dm): point-to-point delivery. Unlike routeMessage there is NO channel
+// and NO fan-out loop — the DM is enqueued ONLY to the recipient (mentions:[target] so
+// it wakes only them) and persisted to the dedicated dm_messages table (never the
+// messages table). It can therefore never reach a third agent's queue or any channel
+// history. The `dm` flag rides the in-memory copy so the recipient's client renders it
+// as a direct message. Throws if the recipient is not connected (same as routeMessage).
+export function sendDm(from: string, to: string, content: string, image?: MessageImage): Message {
+  const targetName = to.startsWith("@") ? to.slice(1) : to;
+  if (!isUserRegistered(targetName)) {
+    throw new Error(`User "${targetName}" is not connected`);
+  }
+  const message: Message = {
+    id: randomUUID(),
+    from,
+    to: targetName,
+    content,
+    channel: "@dm", // sentinel — never a real channel; the `dm` flag is the real signal
+    timestamp: Date.now(),
+    image,
+    mentions: [targetName], // wakes only the recipient
+    dm: true,
+  };
+  dbInsertDm(message);
+  if (targetName !== from) {
+    enqueueAndDeliver(targetName, message);
+  }
+  return message;
 }
 
 export function notifyBridges(content: string): void {

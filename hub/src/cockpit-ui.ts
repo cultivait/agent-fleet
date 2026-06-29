@@ -29,7 +29,6 @@ body.cockpit-mode > .container { display: none; }
 .ck-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-raised); flex-wrap: wrap; }
 .ck-proj { display: flex; align-items: center; gap: 6px; }
 .ck-proj select { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; max-width: 52vw; }
-.ck-demo-flag { font-size: 10px; font-weight: 600; letter-spacing: .04em; color: var(--bg-base); background: var(--yellow); padding: 2px 6px; border-radius: 5px; }
 .ck-del-plan { background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; cursor: pointer; }
 .ck-del-plan:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 .ck-del-plan.armed { background: var(--red); color: var(--bg-base); border-color: var(--red); }
@@ -103,7 +102,7 @@ body.cockpit-mode > .container { display: none; }
 .ck-feed-text { color: var(--text-secondary); }
 .ck-feed-text b { color: var(--text-primary); font-weight: 600; }
 
-/* DAG (desktop only) */
+/* DAG (also shown on mobile — M1) */
 .ck-dag-wrap { width: 100%; height: 100%; overflow: auto; }
 .ck-dag-svg { display: block; }
 .ck-dag-node rect { rx: 7; stroke: var(--border-subtle); stroke-width: 1; }
@@ -111,7 +110,9 @@ body.cockpit-mode > .container { display: none; }
 .ck-dag-node.flagged rect { stroke: var(--red); stroke-dasharray: 3 2; }
 .ck-dag-edge { stroke: var(--text-tertiary); stroke-width: 1.4; fill: none; opacity: .55; }
 .ck-dag-edge.flagged { stroke: var(--red); stroke-dasharray: 4 3; }
-@media (max-width: 819px) { .ck-tab.dag-tab { display: none; } }
+/* M1: surface the Graph on mobile too (was display:none ≤819px). The SVG sizes to
+   content and .ck-dag-wrap overflow:auto lets a wide graph pan; add touch momentum. */
+@media (max-width: 819px) { .ck-dag-wrap { -webkit-overflow-scrolling: touch; } }
 
 /* Drawer */
 .ck-drawer-back { position: fixed; inset: 0; background: rgba(26,28,24,0.32); z-index: 60; display: none; }
@@ -144,6 +145,27 @@ body.cockpit-mode #clear-btn { display: none !important; }
 .ck-needs { background: var(--red-soft); border: 1px solid var(--red-border); border-radius: var(--radius); padding: 9px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
 .ck-needs-label { font-size: 12px; font-weight: 600; color: var(--red); flex: 1; }
 .ck-needs-sub { font-size: 11px; color: var(--text-secondary); }
+.ck-rowzero { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 8px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
+.ck-rowzero.signal { border-color: var(--action); box-shadow: inset 3px 0 0 var(--action); }
+.ck-rowzero .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); flex: none; }
+.ck-rowzero .dot.online { background: var(--green); }
+.ck-rz-you { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--accent-text); background: var(--accent-soft); padding: 2px 6px; border-radius: 4px; }
+.ck-rz-name { font-weight: 600; }
+.ck-rz-sep { color: var(--text-tertiary); }
+.ck-rz-task { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
+.ck-rz-idle { color: var(--text-tertiary); font-style: italic; }
+.ck-rz-flag { color: var(--action); margin-left: auto; }
+.ck-rz-upstream { display: flex; gap: 6px; font-size: 11px; color: var(--text-secondary); margin: -2px 0 8px 6px; }
+.ck-rz-up-label { color: var(--red); }
+/* §B operator-default FLEET strip — prominent, always present (calm baseline never vanishes). */
+.ck-rz-op { padding: 11px 14px; }
+.ck-rz-op-tag { font-size: 10px; font-weight: 700; letter-spacing: .07em; color: var(--accent-text); background: var(--accent-soft); padding: 2px 7px; border-radius: 4px; flex: none; }
+.ck-rz-op-head { font-weight: 600; color: var(--text-primary); }
+.ck-rz-op-head.act { color: var(--action); }
+.ck-rz-op-sub { font-size: 11px; color: var(--text-secondary); margin-left: auto; white-space: nowrap; }
+/* #3 graceful operator-terminal hint (shown instead of a raw "no tmux" error). */
+.ck-term-hint { padding: 24px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); max-width: 52ch; }
+.ck-inst.dark { opacity: .45; }
 
 /* A1: needs-you count badge on Board tab */
 .n.needs { background: var(--red); color: var(--bg-base); border-radius: 10px; padding: 1px 5px; font-size: 10px; font-weight: 700; margin-left: 3px; }
@@ -253,9 +275,27 @@ body.ck-main-loop .ck-proj { display: none; }
 .ck-live-ctx.ck-ctx-compact { margin: 5px 0 1px; }
 
 /* ===== Operator Control Panel (WS-C) ===== */
-.ck-launch-ref { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 12px; padding: 4px 11px; border-radius: 6px; cursor: pointer; flex: none; }
-.ck-launch-ref:hover { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); }
+/* H2: cockpit +Referee adopts the same moss-ghost identity as the sidebar Operator toolbar's
+   additive buttons, so the additive action reads consistently across Radio + Cockpit. */
+.ck-launch-ref { appearance: none; border: 1px solid var(--green-border); background: var(--green-soft); color: var(--accent-text); font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; border-radius: 6px; cursor: pointer; flex: none; }
+.ck-launch-ref:hover { border-color: var(--accent-text); }
+.ck-launch-ref:active { transform: scale(0.98); }
 .ck-launch-ref:disabled { opacity: 0.5; cursor: default; }
+/* Item 3 (+Referee dialog): parameterized launch (channel / draft-loop / builder count). */
+.ck-refdlg { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); }
+.ck-refdlg[hidden] { display: none; }
+.ck-refdlg-card { width: min(440px, 92vw); background: var(--bg-raised, #fff); color: var(--text-primary, #111); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 16px 18px; box-shadow: 0 10px 44px rgba(0,0,0,0.4); display: flex; flex-direction: column; gap: 10px; }
+.ck-refdlg-title { font-size: 14px; font-weight: 600; }
+.ck-refdlg-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.ck-refdlg-row span { flex: 0 0 86px; color: var(--text-secondary); }
+.ck-refdlg-row input, .ck-refdlg-row select { flex: 1; font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); }
+.ck-refdlg-note { font-size: 11px; color: var(--text-tertiary); line-height: 1.4; }
+.ck-refdlg-msg { font-size: 11px; min-height: 13px; color: var(--text-tertiary); }
+.ck-refdlg-msg.err { color: var(--red); }
+.ck-refdlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ck-refdlg-actions button { appearance: none; font: inherit; font-size: 12px; padding: 6px 13px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); }
+.ck-refdlg-go { border-color: var(--green-border) !important; background: var(--green-soft) !important; color: var(--accent-text) !important; }
+.ck-refdlg-actions button:disabled { opacity: 0.5; cursor: default; }
 /* "+ New Plan" — create a project from the cockpit (admin-bearer /admin-project-create) */
 .ck-new-plan { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; flex: none; }
 .ck-new-plan:hover { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); }
@@ -409,6 +449,12 @@ body.ck-main-loop .ck-proj { display: none; }
 .ck-appr-actions { display: flex; gap: 6px; }
 .ck-appr-btn { appearance: none; border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 6px; cursor: pointer; }
 .ck-appr-btn:disabled { opacity: 0.4; cursor: default; }
+/* Item 2 (loop-goal): criteria-gate tag + inline editors (edit-then-approve). */
+.ck-appr-kind { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; background: var(--bg-raised); color: var(--text-tertiary); border: 1px solid var(--border-subtle); }
+.ck-appr-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: 11px; min-height: 42px; resize: vertical; margin: 3px 0 6px; padding: 5px 7px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-surface); color: var(--text-primary); }
+.ck-appr-edit-num { width: 64px; font: inherit; font-size: 11px; padding: 2px 5px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-surface); color: var(--text-primary); }
+.ck-appr-newloop { appearance: none; width: 100%; border: 1px dashed var(--border-subtle); background: var(--bg-raised); color: var(--text-secondary); font: inherit; font-size: 11px; padding: 5px 0; border-radius: 6px; cursor: pointer; margin-bottom: 7px; }
+.ck-appr-newloop:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 .ck-appr-btn.approve:hover:not(:disabled) { border-color: var(--accent-text); color: var(--accent-text); background: var(--accent-soft); }
 .ck-appr-btn.reject:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 
@@ -428,6 +474,22 @@ body.ck-main-loop .ck-proj { display: none; }
 .ck-term-modal { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .ck-term-body { flex: 1; min-height: 0; padding: 6px; background: #FEFCF6; }
 .ck-term-body .xterm { height: 100%; }
+/* B3-REDO v2: the .ck-term-body OWNS touch — a single finger-drag is consumed by the JS
+   touch->wheel forwarder (openTerminal) and forwarded to Claude's pager, NOT handled as a
+   native pan of the (dead, alt-screen) viewport. touch-action:none hands the gesture fully to
+   JS so the forwarder's preventDefault is honored. (Reverts B3 012d15b's viewport touch-action:pan-y,
+   which ate the gesture into a no-op native pan.) */
+.ck-term-body { touch-action: none; }
+/* M2: mobile-only on-screen helper keys for sequences a phone soft-keyboard can't send
+   — Shift+Tab (cycles Claude's permission modes), Tab (completion), Esc (interrupt).
+   Sits at the bottom of the terminal takeover, above the soft keyboard. Hidden on
+   desktop; the overlay is display:none until .open, so it only shows with a live term.
+   Colors track the paper terminal theme via the cockpit CSS vars. */
+.ck-term-keys { display: none; flex: none; flex-wrap: wrap; gap: 6px; padding: 6px; background: var(--bg-raised); border-top: 1px solid var(--border); }
+@media (max-width: 819px) { .ck-term-keys { display: flex; } }  /* 6 keys (⇧Tab/Tab/Esc/Deploy/Compact/Rejoin) wrap to 2 rows on narrow phones — never clip */
+.ck-term-key { flex: 1 1 90px; min-width: 60px; font-family: var(--mono); font-size: 12px; font-weight: 500; padding: 11px 4px; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.ck-term-key:active { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent-text); }
+.ck-term-key:disabled { opacity: 0.45; cursor: default; }
 /* MOBILE: the terminal stays an in-place takeover of the chat column
    (.message-area) at ALL widths — it never goes whole-screen. The header + top
    menu / channel nav sit OUTSIDE .message-area, so they stay visible exactly like
@@ -445,7 +507,6 @@ export function cockpitMarkup(): string {
     </div>
     <div class="ck-proj">
       <select id="ck-project" aria-label="Project"></select>
-      <span id="ck-demo-flag" class="ck-demo-flag" style="display:none">DEMO</span>
       <div class="ck-newplan-pop">
         <button class="ck-new-plan" id="ck-new-plan" title="Create a new plan">+ New Plan</button>
         <div class="ck-newplan-form" id="ck-newplan-form">
@@ -460,7 +521,21 @@ export function cockpitMarkup(): string {
       </div>
       <button class="ck-del-plan" id="ck-del-plan" type="button" title="Delete the selected plan and its tasks">Delete</button>
     </div>
-    <button class="ck-launch-ref" id="ck-launch-ref" title="Spawn a headless referee on this hub (tmux)">+ Referee</button>
+    <button class="ck-launch-ref" id="ck-launch-ref" title="Launch a referee + builders (dialog)">+ Referee</button>
+    <div class="ck-refdlg" id="ck-refdlg" hidden>
+      <div class="ck-refdlg-card">
+        <div class="ck-refdlg-title">Launch Referee + Builders</div>
+        <label class="ck-refdlg-row"><span>Channel</span><input type="text" id="ck-refdlg-channel" value="#all" /></label>
+        <label class="ck-refdlg-row"><span>Goal loop</span><select id="ck-refdlg-loop"><option value="">(none — referee w/o a bound loop)</option></select></label>
+        <label class="ck-refdlg-row"><span># Builders</span><input type="number" id="ck-refdlg-builders" min="0" max="10" value="0" /></label>
+        <div class="ck-refdlg-note">Spawns 1 referee + N builders <strong>locally on the hub host</strong> (needs tmux + the claude CLI on PATH; not cross-machine). Capped at 10.</div>
+        <div class="ck-refdlg-msg" id="ck-refdlg-msg"></div>
+        <div class="ck-refdlg-actions">
+          <button type="button" class="ck-refdlg-cancel" id="ck-refdlg-cancel">Cancel</button>
+          <button type="button" class="ck-refdlg-go" id="ck-refdlg-go">Launch</button>
+        </div>
+      </div>
+    </div>
     <button class="ck-appr-badge" id="ck-appr-badge" style="display:none" title="Pending approvals — open the Loop page">⚠ approvals <span id="ck-appr-badge-n">0</span></button>
     <div id="ck-conn" class="ck-conn"><span class="dot"></span><span id="ck-conn-text">live</span></div>
   </div>
@@ -515,6 +590,7 @@ export function cockpitMarkup(): string {
         <span class="ck-appr-caret" id="ck-appr-caret">▸</span>
       </div>
       <div class="ck-appr-body" id="ck-appr-body">
+        <button type="button" class="ck-appr-newloop" id="ck-appr-newloop">＋ Goal loop</button>
         <div id="ck-appr-list"></div>
         <div class="ck-appr-msg" id="ck-appr-msg"></div>
       </div>
@@ -558,8 +634,10 @@ export function cockpitMarkup(): string {
 // admin routes. The default "" (no-arg test path) yields an empty Bearer → 401 fail-SAFE,
 // never fail-open. Function-replacer (not a string pattern) so a "$"-bearing token is inserted
 // verbatim.
-export function cockpitScript(token: string = ""): string {
-  return COCKPIT_SCRIPT.replace("__WT_ADMIN_TOKEN__", () => token);
+export function cockpitScript(token: string = "", operatorName: string = "Operator"): string {
+  return COCKPIT_SCRIPT
+    .replace("__WT_ADMIN_TOKEN__", () => token)
+    .replace("__WT_OPERATOR_NAME__", () => operatorName);
 }
 
 const COCKPIT_SCRIPT = String.raw`
@@ -571,6 +649,27 @@ const COCKPIT_SCRIPT = String.raw`
   // (→ 401 fail-safe). Same blast radius as the dashboard script in this same page.
   var ADMIN_TOKEN = "__WT_ADMIN_TOKEN__";
   var adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + ADMIN_TOKEN };
+
+  // ========== operator / principal identity ==========
+  // The cockpit model carries no role field — instances are derived from task owners. Mirror
+  // the name convention dashboard.ts already uses: the operator is OPERATOR_NAME (threaded in
+  // by cockpitScript(token, operatorName) — single source), principals are REFEREE*.
+  // TWO predicates, deliberately different scope (Wave (b) revert of afae30d's over-broad #2):
+  //   isOperator            — ONLY the session-less human operator. Drives (a) AGENT-rail
+  //                           exclusion and (b) terminal-target exclusion. The REFEREE is a
+  //                           tmux-backed agent with a live wt-* session, so it STAYS in the
+  //                           rail and IS watchable — amputating that mirror was the regression
+  //                           this restores.
+  //   isOperatorOrPrincipal — operator OR REFEREE*. Drives ONLY the row-zero strip display-POV
+  //                           (?as=REFEREE → operator strip); left wider on purpose.
+  var OPERATOR_NAME = "__WT_OPERATOR_NAME__";
+  function isOperator(label) { return !!(label && OPERATOR_NAME && label === OPERATOR_NAME); }
+  function isOperatorOrPrincipal(label) {
+    if (!label) return false;
+    if (OPERATOR_NAME && label === OPERATOR_NAME) return true;
+    return String(label).trim().toUpperCase().indexOf("REFEREE") === 0;
+  }
+  function isAgentInstance(inst) { return !!(inst && inst.label && !isOperator(inst.label)); }
 
   // ========== verbatim copies of tested pure modules ==========
   // KEEP IDENTICAL to cockpit-lease.ts / cockpit-feed.ts / cockpit-model.ts / cockpit-dag.ts.
@@ -840,6 +939,30 @@ const COCKPIT_SCRIPT = String.raw`
 
   // ========== helpers ==========
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+  // Keyed reconcile: unchanged children keep DOM identity (no flicker, no animation
+  // replay). createFn builds + binds handlers ONCE; updateFn patches in place.
+  function reconcileChildren(parent, items, keyFn, createFn, updateFn) {
+    var existing = {}, c = parent.firstChild;
+    while (c) { if (c.nodeType === 1 && c.__key != null) existing[c.__key] = c; c = c.nextSibling; }
+    var used = {};
+    items.forEach(function (item, i) {
+      var k = keyFn(item), node = existing[k];
+      if (node) { updateFn(node, item); }
+      else { node = createFn(item); node.__key = k; }
+      used[k] = 1;
+      var ref = parent.childNodes[i] || null;
+      if (ref !== node) parent.insertBefore(node, ref);
+    });
+    Object.keys(existing).forEach(function (k) { if (!used[k]) parent.removeChild(existing[k]); });
+  }
+  // Row-zero POV (DEC-1): client-only, DISPLAY-ONLY — picks whose line is row-zero, grants
+  // no auth/data. #1 LEAK FIX: operator-default = NO ?as= in the LIVE querystring. We do NOT
+  // fall back to a stored value — that let a foreign agent's prior ?as= leak (via ck_viewer)
+  // into the plain operator URL and render a foreign agent as "YOU". An agent's explicit POV
+  // survives reloads because ?as= stays in the address bar; absence always means operator.
+  function viewerCallsign() {
+    try { return new URLSearchParams(window.location.search).get("as") || null; } catch (e) { return null; }
+  }
   function relTime(ms, now) {
     var diff = Math.round((now - ms) / 1000);
     if (diff < 0) diff = 0;
@@ -853,7 +976,7 @@ const COCKPIT_SCRIPT = String.raw`
 
   // ========== state ==========
   var S = {
-    projectId: "__demo__", demo: true, model: null, leaseOffset: 0, feed: [],
+    projectId: null, model: null, leaseOffset: 0, feed: [],
     openLanes: null, activeView: "ops", refetchTimer: null, drawerTaskId: null, projectsLoaded: false,
     feedFilter: "all", feedNewCount: 0, feedPrevLen: null,
     mainView: "loop",
@@ -866,60 +989,6 @@ const COCKPIT_SCRIPT = String.raw`
   };
   var FEED_LIMIT = 200;
   function $(id) { return document.getElementById(id); }
-
-  // ========== demo fixture (relative to client now) ==========
-  function buildDemoData(now) {
-    var MIN = 60000;
-    function t(o) { o.project_id = "__demo__"; if (o.parent_id === undefined) o.parent_id = null; if (o.detail === undefined) o.detail = null; if (o.owner === undefined) o.owner = null; if (o.owner_sid === undefined) o.owner_sid = null; if (o.priority === undefined) o.priority = 2; o.artifacts = o.artifacts || null; if (o.claimed_at === undefined) o.claimed_at = null; if (o.done_at === undefined) o.done_at = null; if (o.lease_expires_at === undefined) o.lease_expires_at = null; o.created_at = o.created_at || (now - 90 * MIN); o.updated_at = now; return o; }
-    var lanes = {
-      proposed: [ t({ id: "api-design", title: "API contract design", priority: 1 }), t({ id: "design-review", title: "Design doc review", priority: 3 }) ],
-      ratified: [ t({ id: "schema-plan", title: "Schema migration plan", priority: 1 }) ],
-      ready: [ t({ id: "db-migrate", title: "Database migration", priority: 0 }), t({ id: "seed-data", title: "Seed data v2", priority: 2 }) ],
-      claimed: [ t({ id: "auth", title: "Refactor auth flow", owner: "linux-web", owner_sid: "s-web", priority: 1, claimed_at: now - 30 * MIN, lease_expires_at: now - 25000 }) ],
-      in_progress: [
-        t({ id: "ratelimit", title: "Add API rate limiting", owner: "linux-255c", owner_sid: "s-255c", priority: 0, claimed_at: now - 12 * MIN, lease_expires_at: now + 40000 }),
-        t({ id: "search", title: "Search indexing", owner: "linux-d4aa", owner_sid: "s-d4aa", priority: 2, claimed_at: now - 6 * MIN, lease_expires_at: now + 12 * MIN })
-      ],
-      review: [ t({ id: "token-refresh", title: "Token refresh handling", owner: "linux-api", owner_sid: "s-api", priority: 1, claimed_at: now - 20 * MIN }) ],
-      blocked: [ t({ id: "release", title: "Release candidate cut", priority: 0 }) ],
-      done: [ t({ id: "logging", title: "Structured logging", priority: 2, done_at: now - 70 * MIN }), t({ id: "metrics", title: "Metrics export", priority: 2, done_at: now - 60 * MIN }),
-        t({ id: "cache-detail", title: "Response cache headers", parent_id: "ratelimit", priority: 2, done_at: now - 15 * MIN }) ],
-      failed: [],
-      abandoned: [ t({ id: "legacy-rewrite", title: "Legacy rewrite (rejected)", priority: 4 }) ]
-    };
-    // a second child of ratelimit, still in progress (drives the child rollup 2/1/1)
-    lanes.in_progress.push(t({ id: "quota-detail", title: "Per-key quota buckets", parent_id: "ratelimit", owner: "linux-255c", owner_sid: "s-255c", priority: 1, claimed_at: now - 9 * MIN, lease_expires_at: now + 8 * MIN }));
-    // Stamp each task's status from its lane (real /plan-board rows carry status;
-    // the fixture derives it from lane membership so the model reads it correctly).
-    Object.keys(lanes).forEach(function (k) { lanes[k].forEach(function (task) { task.status = k; }); });
-    var deps = [
-      { task_id: "ratelimit", blocks_on: "db-migrate" },
-      { task_id: "release", blocks_on: "db-migrate" }, { task_id: "release", blocks_on: "seed-data" },
-      { task_id: "release", blocks_on: "ratelimit" }, { task_id: "release", blocks_on: "auth" }
-    ];
-    var childSummaries = { ratelimit: { total: 2, terminal: 1, done: 1 } };
-    var events = [
-      { id: 1, task_id: "logging", ts: now - 70 * MIN, actor: "linux-255c", kind: "transition", from_status: "in_progress", to_status: "done", note: null },
-      { id: 2, task_id: "metrics", ts: now - 60 * MIN, actor: "linux-api", kind: "transition", from_status: "review", to_status: "done", note: null },
-      { id: 3, task_id: "ratelimit", ts: now - 12 * MIN, actor: "linux-255c", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 4, task_id: "ratelimit", ts: now - 12 * MIN, actor: "linux-255c", kind: "transition", from_status: "claimed", to_status: "in_progress", note: null },
-      { id: 5, task_id: "search", ts: now - 6 * MIN, actor: "linux-d4aa", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 6, task_id: "token-refresh", ts: now - 20 * MIN, actor: "linux-api", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 7, task_id: "token-refresh", ts: now - 4 * MIN, actor: "linux-api", kind: "handoff", from_status: null, to_status: null, note: JSON.stringify({ summary: "Implemented token refresh; needs a reviewer to check the 401 retry path before sign-off.", next_step: "Verify the refresh-token rotation", blockers: [] }) },
-      { id: 8, task_id: "release", ts: now - 3 * MIN, actor: "linux-d4aa", kind: "transition", from_status: "ready", to_status: "blocked", note: null },
-      { id: 9, task_id: "auth", ts: now - 30 * MIN, actor: "linux-web", kind: "claim", from_status: "ready", to_status: "claimed", note: null },
-      { id: 10, task_id: "auth", ts: now - 20000, actor: "system", kind: "lease_expired", from_status: null, to_status: null, note: JSON.stringify({ summary: "Lease expired — reclaim pending on next sweep.", system: true }) }
-    ];
-    var presence = [
-      // contextTokens/contextTs seed the per-agent gauge so the demo exercises every band: green / amber / red / stale-grey.
-      { sid: "s-255c", name: "linux-255c", online: true, lastSeenAt: now - 20000, contextTokens: 175000, contextTs: now - 10000 },
-      // C5 demo: d4aa holds a healthy 12min lease but hasn't beat in ~6min → stalled radar.
-      { sid: "s-d4aa", name: "linux-d4aa", online: true, lastSeenAt: now - 6 * MIN, contextTokens: 312000, contextTs: now - 10000 },
-      { sid: "s-api", name: "linux-api", online: true, lastSeenAt: now - 15000, contextTokens: 372000, contextTs: now - 10000 },
-      { sid: "s-web", name: "linux-web", online: false, lastSeenAt: now - 30 * MIN, contextTokens: 240000, contextTs: now - 5 * MIN }
-    ];
-    return { board: { project: { id: "__demo__", title: "Acme Platform — API Rewrite", status: "active" }, lanes: lanes, deps: deps, childSummaries: childSummaries, now: now }, events: events, presence: presence };
-  }
 
   // ========== live fleet cards: REMOVED ==========
   // The "Live" page (per-instance fleet cards) was retired and its page slot repurposed
@@ -1007,8 +1076,13 @@ const COCKPIT_SCRIPT = String.raw`
       });
   }
 
-  function switchMainView(view) {
+  function switchMainView(view, persist) {
     S.mainView = view;
+    // Persist a DELIBERATE nav choice only (button click) so it sticks across reloads;
+    // the operator-default init landing + the transient approvals-badge drill-in pass
+    // persist=false. "ck_main" is the viewer's own benign pane choice (mirrors "ck_mode")
+    // — NOT the cross-identity "ck_viewer" POV leak; do not conflate.
+    if (persist) { try { localStorage.setItem("ck_main", view); } catch (e) {} }
     document.querySelectorAll(".ck-main-btn").forEach(function(b) { b.classList.toggle("active", b.getAttribute("data-main") === view); });
     document.body.classList.toggle("ck-main-loop", view === "loop");
     if (view === "loop") {
@@ -1016,7 +1090,7 @@ const COCKPIT_SCRIPT = String.raw`
       loadLoopCtl(); renderLoopsSchedule(); loadAppr();
     } else {
       // Lazy-init plan on first switch
-      if (!S.model) { setProject(S.projectId); loadProjects(); } else { renderAll(); }
+      if (!S.model) { loadProjects(); } else { renderAll(); }
     }
   }
 
@@ -1033,15 +1107,9 @@ const COCKPIT_SCRIPT = String.raw`
     return m;
   }
   function loadData(cb) {
-    if (S.demo) {
-      var d = buildDemoData(Date.now());
-      S.leaseOffset = 0;
-      S.model = buildCockpitModel(d.board, d.presence);
-      S.ctxBySid = buildCtxMap(d.presence);
-      S.feed = mergeFeed([], d.events.map(toRawEvent), { limit: FEED_LIMIT });
-      if (cb) cb();
-      return;
-    }
+    // No project selected (before the picker resolves, or after the selected plan
+    // was deleted): nothing to fetch/render — bail safely (no demo fallback now).
+    if (!S.projectId) return;
     var pid = encodeURIComponent(S.projectId);
     Promise.all([
       fetch("/plan-board?project_id=" + pid).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
@@ -1130,17 +1198,205 @@ const COCKPIT_SCRIPT = String.raw`
     return row;
   }
 
-  function renderRail() {
-    var v = $("ck-view-ops"); v.textContent = "";
-    // A1: "Needs you" strip for review + blocked + W4.1-a wedged tasks
+  function railInstances() {
+    // #3: include ALL instances, incl. dark (offline beyond presence grace). Dark are
+    // dimmed + "at rest" (NOT reap language), sorted after live.
+    var all = S.model.instances.filter(isAgentInstance).map(function (inst) {
+      // #2: operator/principal are NOT agents — exclude them from the agent rail so they
+      // never render as clickable cards (clicking → openTerminal on a non-agent → tmux error).
+      var copy = {}; for (var p in inst) copy[p] = inst[p];
+      copy.dark = !instanceLive(inst);
+      return copy;
+    });
+    var live = all.filter(function (i) { return !i.dark; });
+    var dark = all.filter(function (i) { return i.dark; });
+    dark.sort(function (a, b) { return String(a.label).localeCompare(String(b.label)); });
+    return live.concat(dark);
+  }
+  function instSig(inst) {
+    var t = inst.task || {};
+    var ic = (t.owner_sid && S.ctxBySid && S.ctxBySid[t.owner_sid]) ? S.ctxBySid[t.owner_sid] : null;
+    var stalled = (t.status === "claimed" || t.status === "in_progress")
+      ? stallState({ lastSeenAt: t.ownerLastSeenAt, leaseExpiresAt: t.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset }).stalled : false;
+    var hand = latestHandoffFor(t.id);
+    var sec = (inst.secondaryTasks || []).map(function (s) { return s.id + ":" + s.status; }).join(",");
+    return [inst.online ? 1 : 0, inst.dark ? 1 : 0, t.id, t.status, t.title, t.lease_expires_at, t.claimed_at,
+      ic ? ic.tokens : "", ic ? ic.ts : "", stalled ? 1 : 0, hand ? hand.summary : "", sec].join("|");
+  }
+  function buildInstInner(card, inst) {
+    var head = el("div", "ck-inst-head");
+    head.appendChild(el("span", "dot" + (inst.online ? " online" : "")));
+    var nameEl = el("span", "ck-inst-name", inst.label);
+    if (inst.label && inst.online) {
+      nameEl.classList.add("ck-term-open"); nameEl.title = "Open terminal (read-only)";
+      nameEl.setAttribute("data-callsign", inst.label);
+      (function (callsign) { nameEl.onclick = function () { openTerminal(callsign); }; })(inst.label);
+    }
+    head.appendChild(nameEl);
+    head.appendChild(el("span", "ck-inst-status", inst.dark ? "at rest" : ((STATUS_META[inst.task.status] || {}).label || inst.task.status)));
+    if (inst.label) { var pinEl = pinChip(inst.label); pinEl.classList.add("ck-inst-pin"); head.appendChild(pinEl); }
+    if (!inst.dark) {
+      var rst = (inst.task.status === "claimed" || inst.task.status === "in_progress")
+        ? stallState({ lastSeenAt: inst.task.ownerLastSeenAt, leaseExpiresAt: inst.task.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset })
+        : { stalled: false, label: null };
+      if (rst.stalled) head.appendChild(el("span", "ck-stall", "⏸ " + rst.label));
+    }
+    card.appendChild(head);
+    var tl = el("div", "ck-inst-task", inst.task.title); tl.style.cursor = "pointer"; tl.onclick = function () { openDrawer(inst.task.id); }; card.appendChild(tl);
+    if (inst.task.owner_sid && S.ctxBySid && S.ctxBySid[inst.task.owner_sid]) {
+      var ic = S.ctxBySid[inst.task.owner_sid];
+      var icBar = renderCtxBar(ic.tokens, ic.ts, clientNow() + S.leaseOffset, ic.online && !ic.stale, true);
+      if (icBar) card.appendChild(icBar);
+    }
+    if (inst.task.lease_expires_at != null) card.appendChild(leaseRow(inst.task));
+    card.appendChild(handoffLine(inst.task.id));
+    if (inst.secondaryTasks && inst.secondaryTasks.length) {
+      var secEl = el("div", "ck-inst-secondary");
+      inst.secondaryTasks.forEach(function (st) {
+        var sc = el("span", "ck-inst-sec-chip " + st.status);
+        sc.textContent = "+" + ((STATUS_META[st.status] || {}).label || st.status) + ": " + (st.title.length > 30 ? st.title.slice(0, 29) + "…" : st.title);
+        (function (id) { sc.onclick = function () { openDrawer(id); }; })(st.id);
+        secEl.appendChild(sc);
+      });
+      card.appendChild(secEl);
+    }
+  }
+  // #5 single live signal = MY actionable event. steady: lease urgent/expired on my
+  // task. fresh: a handoff-to-me or my-task->ready that JUST landed (one-shot settle).
+  function myActionable(me) {
+    if (!me || !me.task) return { steady: false, fresh: false };
+    var steady = false;
+    if (me.task.lease_expires_at != null) {
+      var u = leaseState({ claimedAt: me.task.claimed_at, leaseExpiresAt: me.task.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset }).urgency;
+      if (u === "urgent" || u === "expired") steady = true;
+    }
+    var firstPass = !S.seenMyEvents;
+    if (!S.seenMyEvents) S.seenMyEvents = {};
+    var mine = {}; mine[me.task.id] = 1;
+    (me.secondaryTasks || []).forEach(function (s) { mine[s.id] = 1; });
+    var fresh = false;
+    for (var i = 0; i < S.feed.length; i++) {
+      var e = S.feed[i];
+      if (!mine[e.taskId]) continue;
+      var isMine = (e.kind === "handoff" && e.actor !== me.label) || (e.kind === "transition" && e.toStatus === "ready");
+      if (!isMine) continue;
+      if (!S.seenMyEvents[e.key]) { S.seenMyEvents[e.key] = 1; if (!firstPass) fresh = true; }
+    }
+    return { steady: steady, fresh: fresh };
+  }
+  function clip(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+  function laneByStatus(s) { var L = (S.model && S.model.lanes) || []; for (var i = 0; i < L.length; i++) { if (L[i].status === s) return L[i].tasks || []; } return []; }
+  // §B operator-default FLEET strip — the visible win. The cockpit's one human viewer is the
+  // operator; the default view answers "what needs YOU + how's the fleet". ALWAYS present:
+  // the calm baseline never vanishes (else a quiet fleet reads as "nothing changed" again).
+  // Escalates when signals exist. Built from EXISTING data only (approvals poll, lanes,
+  // wedged, per-instance stall). Order (LOCKED): approvals → "N need you" → calm baseline.
+  // Single --action discipline: at most ONE accent (the top live item).
+  function renderOperatorRowZero(v, existing) {
+    var rz = existing || el("div", "ck-rowzero");
+    rz.textContent = "";
+    var approvals = (S.appr && S.appr.length) ? S.appr.length : 0;
     var reviewCount = 0, blockedCount = 0;
-    S.model.lanes.forEach(function (l) {
+    if (S.model && S.model.lanes) S.model.lanes.forEach(function (l) {
       if (l.status === "review") reviewCount = l.count;
       if (l.status === "blocked") blockedCount = l.count;
     });
     var wedgedCount = S.wedged ? S.wedged.length : 0;
+    var agents = railInstances(); // agents only (#2 filter) — operator/principal excluded
+    var activeCount = 0, stalledCount = 0, stalledName = null;
+    for (var ai = 0; ai < agents.length; ai++) {
+      var a = agents[ai]; if (!a.dark) activeCount++;
+      var t = a.task || {};
+      if (t.status === "claimed" || t.status === "in_progress") {
+        var st = stallState({ lastSeenAt: t.ownerLastSeenAt, leaseExpiresAt: t.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset });
+        if (st.stalled) { stalledCount++; if (!stalledName) stalledName = a.label; }
+      }
+    }
+    var needsCount = reviewCount + blockedCount + wedgedCount + stalledCount;
+    // "most-urgent named" for (2): review (awaiting your merge) > blocked > stalled agent.
+    var topName = null, rl = laneByStatus("review"), bl = laneByStatus("blocked");
+    if (rl.length) topName = rl[0].title; else if (bl.length) topName = bl[0].title; else if (stalledName) topName = stalledName;
+    var urgent = approvals > 0 || needsCount > 0;
+    rz.className = "ck-rowzero ck-rz-op" + (urgent ? " signal" : " calm");
+    rz.appendChild(el("span", "ck-rz-op-tag", "FLEET"));
+    rz.appendChild(el("span", "dot online"));
+    var head = el("span", "ck-rz-op-head");
+    if (approvals > 0) { head.className = "ck-rz-op-head act"; head.textContent = "▶ " + approvals + " approval" + (approvals > 1 ? "s" : "") + " waiting"; }
+    else if (needsCount > 0) { head.className = "ck-rz-op-head act"; head.textContent = "⚑ " + needsCount + " need you" + (topName ? " — " + clip(topName, 40) : ""); }
+    else { head.textContent = "✓ Fleet nominal"; }
+    rz.appendChild(head);
+    var parts = [activeCount + " active"];
+    if (approvals > 0) parts.push(approvals + " approval" + (approvals > 1 ? "s" : ""));
+    if (reviewCount) parts.push(reviewCount + " in review");
+    if (blockedCount) parts.push(blockedCount + " blocked");
+    if (wedgedCount) parts.push(wedgedCount + " wedged");
+    if (stalledCount) parts.push(stalledCount + " stalled");
+    if (!urgent) parts.push("0 need you");
+    rz.appendChild(el("span", "ck-rz-op-sub", parts.join(" · ")));
+    if (v.firstChild !== rz) v.insertBefore(rz, v.firstChild);
+  }
+  function renderRowZero(v) {
+    var up = v.querySelector(".ck-rz-upstream"); if (up) up.remove();
+    var me = viewerCallsign();
+    var existing = v.querySelector(".ck-rowzero");
+    // Operator-default (no ?as=) OR a stray ?as=Operator/REFEREE → the FLEET strip (§B), never a
+    // foreign agent's seat. Agent POV (?as=<liveAgent>) keeps the ad1cba7 row-zero below.
+    if (!me || isOperatorOrPrincipal(me)) { renderOperatorRowZero(v, existing); return; }
+    var inst = railInstances().filter(function (i) { return i.label === me; })[0] || null;
+    var act = inst ? myActionable(inst) : { steady: false, fresh: false };
+    var rz = existing || el("div", "ck-rowzero");
+    rz.textContent = "";
+    rz.className = "ck-rowzero" + (act.steady ? " signal" : "");
+    rz.appendChild(el("span", "ck-rz-you", "YOU"));
+    rz.appendChild(el("span", "dot" + (inst && inst.online ? " online" : "")));
+    rz.appendChild(el("span", "ck-rz-name", me));
+    if (inst && inst.task) {
+      rz.appendChild(el("span", "ck-rz-sep", "·"));
+      var tk = el("span", "ck-rz-task", inst.task.title + " — " + ((STATUS_META[inst.task.status] || {}).label || inst.task.status));
+      tk.style.cursor = "pointer"; (function (id) { tk.onclick = function () { openDrawer(id); }; })(inst.task.id);
+      rz.appendChild(tk);
+      if (inst.task.owner_sid && S.ctxBySid && S.ctxBySid[inst.task.owner_sid]) {
+        var ic = S.ctxBySid[inst.task.owner_sid];
+        var icBar = renderCtxBar(ic.tokens, ic.ts, clientNow() + S.leaseOffset, ic.online && !ic.stale, true);
+        if (icBar) rz.appendChild(icBar);
+      }
+      if (inst.task.lease_expires_at != null) rz.appendChild(leaseRow(inst.task));
+      if (act.steady) rz.appendChild(el("span", "ck-rz-flag", "⚑"));
+    } else {
+      rz.appendChild(el("span", "ck-rz-sep", "·"));
+      rz.appendChild(el("span", "ck-rz-idle", "no active task"));
+    }
+    if (v.firstChild !== rz) v.insertBefore(rz, v.firstChild);
+    if (act.fresh) { rz.classList.remove("ck-signal"); void rz.offsetWidth; rz.classList.add("ck-signal"); }
+    // "my upstream beneath": if my task is blocked, NAME its blocker source(s) directly under YOU
+    if (inst && inst.task && inst.task.status === "blocked") {
+      var blkIds = (S.model && S.model.blockedBy && S.model.blockedBy[inst.task.id]) || [];
+      var blkNames = [];
+      for (var bi = 0; bi < blkIds.length; bi++) {
+        var bt = S.model.byId && S.model.byId[blkIds[bi]];
+        if (bt && bt.title) blkNames.push(bt.title);
+      }
+      var upWrap = el("div", "ck-rz-upstream");
+      upWrap.appendChild(el("span", "ck-rz-up-label", "⛔ upstream:"));
+      upWrap.appendChild(el("span", null, blkNames.length ? blkNames.join(", ") : "waiting"));
+      v.insertBefore(upWrap, rz.nextSibling);
+    }
+  }
+  function renderRail() {
+    var v = $("ck-view-ops");
+    var list = v.querySelector(".ck-ops-list");
+    if (!list) { v.textContent = ""; list = el("div", "ck-ops-list"); v.appendChild(list); }
+    renderRowZero(v);
+    var oldStrip = v.querySelector(".ck-needs"); if (oldStrip) oldStrip.remove();
+    var reviewCount = 0, blockedCount = 0;
+    S.model.lanes.forEach(function (l) { if (l.status === "review") reviewCount = l.count; if (l.status === "blocked") blockedCount = l.count; });
+    var wedgedCount = S.wedged ? S.wedged.length : 0;
     var needsCount = reviewCount + blockedCount + wedgedCount;
-    if (needsCount > 0) {
+    // Operator-default uses the §B FLEET strip (rendered by renderRowZero) which already
+    // subsumes these counts — show this generic strip only in an agent's ?as= POV so it
+    // isn't doubled up under the operator's own strip.
+    var _mr = viewerCallsign();
+    if (needsCount > 0 && _mr && !isOperatorOrPrincipal(_mr)) {
       var strip = el("div", "ck-needs");
       strip.appendChild(el("span", "ck-needs-label", "⚑ Needs you (" + needsCount + ")"));
       var parts = [];
@@ -1148,54 +1404,15 @@ const COCKPIT_SCRIPT = String.raw`
       if (blockedCount) parts.push(blockedCount + " blocked");
       if (wedgedCount) parts.push(wedgedCount + " wedged");
       strip.appendChild(el("span", "ck-needs-sub", parts.join(" · ")));
-      v.appendChild(strip);
+      v.insertBefore(strip, list);
     }
-    var insts = liveInstances();
-    if (!insts.length) { v.appendChild(emptyState("No instances working right now.", "The Right Now rail shows each agent's in-flight task and lease as work is claimed.")); return; }
-    insts.forEach(function (inst) {
-      var card = el("div", "ck-inst");
-      var head = el("div", "ck-inst-head");
-      head.appendChild(el("span", "dot" + (inst.online ? " online" : "")));
-      var nameEl = el("span", "ck-inst-name", inst.label);
-      // Interactive terminal: clicking a LIVE agent's name opens a read-only
-      // terminal mirror of its tmux session. Demo rows aren't real fleet members.
-      if (!S.demo && inst.label && inst.online) {
-        nameEl.classList.add("ck-term-open");
-        nameEl.title = "Open terminal (read-only)";
-        nameEl.setAttribute("data-callsign", inst.label);
-        (function (callsign) { nameEl.onclick = function () { openTerminal(callsign); }; })(inst.label);
-      }
-      head.appendChild(nameEl);
-      head.appendChild(el("span", "ck-inst-status", (STATUS_META[inst.task.status] || {}).label || inst.task.status));
-      // C3: per-agent kill-exempt pin (callsign-keyed), live data only — demo callsigns aren't real fleet members
-      if (!S.demo && inst.label) { var pinEl = pinChip(inst.label); pinEl.classList.add("ck-inst-pin"); head.appendChild(pinEl); }
-      // C5 rail radar: flag a quiet-but-not-yet-lapsed owner right on the instance head.
-      var rst = (inst.task.status === "claimed" || inst.task.status === "in_progress")
-        ? stallState({ lastSeenAt: inst.task.ownerLastSeenAt, leaseExpiresAt: inst.task.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset })
-        : { stalled: false, label: null };
-      if (rst.stalled) head.appendChild(el("span", "ck-stall", "⏸ " + rst.label));
-      card.appendChild(head);
-      var tl = el("div", "ck-inst-task", inst.task.title); tl.style.cursor = "pointer"; tl.onclick = function () { openDrawer(inst.task.id); }; card.appendChild(tl);
-      // Per-agent context gauge: bar only, full count on hover (same gauge as the Live view).
-      if (inst.task.owner_sid && S.ctxBySid && S.ctxBySid[inst.task.owner_sid]) {
-        var ic = S.ctxBySid[inst.task.owner_sid];
-        var icBar = renderCtxBar(ic.tokens, ic.ts, clientNow() + S.leaseOffset, ic.online && !ic.stale, true);
-        if (icBar) card.appendChild(icBar);
-      }
-      if (inst.task.lease_expires_at != null) card.appendChild(leaseRow(inst.task));
-      card.appendChild(handoffLine(inst.task.id));
-      if (inst.secondaryTasks && inst.secondaryTasks.length) {
-        var sec = el("div", "ck-inst-secondary");
-        inst.secondaryTasks.forEach(function(st) {
-          var sc = el("span", "ck-inst-sec-chip " + st.status);
-          sc.textContent = "+" + ((STATUS_META[st.status] || {}).label || st.status) + ": " + (st.title.length > 30 ? st.title.slice(0, 29) + "…" : st.title);
-          (function(id) { sc.onclick = function() { openDrawer(id); }; })(st.id);
-          sec.appendChild(sc);
-        });
-        card.appendChild(sec);
-      }
-      v.appendChild(card);
-    });
+    var insts = railInstances();
+    if (!insts.length) { list.textContent = ""; list.appendChild(emptyState("No instances working right now.", "The Right Now rail shows each agent's in-flight task and lease as work is claimed.")); return; }
+    if (list.firstChild && list.firstChild.nodeType === 1 && list.firstChild.className === "ck-empty") list.textContent = "";
+    reconcileChildren(list, insts,
+      function (inst) { return inst.label || inst.sid; },
+      function (inst) { var card = el("div", "ck-inst" + (inst.dark ? " dark" : "")); buildInstInner(card, inst); card.__sig = instSig(inst); return card; },
+      function (node, inst) { var s = instSig(inst); if (s === node.__sig) return; node.__sig = s; node.className = "ck-inst" + (inst.dark ? " dark" : ""); node.textContent = ""; buildInstInner(node, inst); });
   }
   function handoffLine(taskId) {
     var wrap = el("div");
@@ -1210,40 +1427,67 @@ const COCKPIT_SCRIPT = String.raw`
   }
   function parseNote(e) { try { return e.note ? JSON.parse(e.note) : null; } catch (x) { return null; } }
 
+  function chipSig(task) {
+    var oc = (task.owner_sid && S.ctxBySid && S.ctxBySid[task.owner_sid]) ? S.ctxBySid[task.owner_sid] : null;
+    var st = (task.status === "claimed" || task.status === "in_progress")
+      ? stallState({ lastSeenAt: task.ownerLastSeenAt, leaseExpiresAt: task.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset }).stalled : false;
+    return [task.status, task.title, task.priority, task.ownerLabel, task.ownerOnline ? 1 : 0,
+      task.lease_expires_at, task.claimed_at, oc ? oc.tokens : "", oc ? oc.ts : "", st ? 1 : 0,
+      task.blockedByCount, task.childSummary ? (task.childSummary.done + "/" + task.childSummary.total) : "",
+      (S.wedgedSet && S.wedgedSet[task.id]) ? 1 : 0].join("|");
+  }
+  function patchNodeFrom(node, fresh) {
+    node.className = fresh.className; node.textContent = "";
+    while (fresh.firstChild) node.appendChild(fresh.firstChild);
+    node.onclick = fresh.onclick;
+  }
+  function reconcileChips(body, tasks) {
+    reconcileChildren(body, tasks, function (t) { return t.id; },
+      function (t) { var c = chip(t); c.__sig = chipSig(t); return c; },
+      function (cnode, t) { var s = chipSig(t); if (s === cnode.__sig) return; cnode.__sig = s; patchNodeFrom(cnode, chip(t)); });
+  }
   function renderBoard() {
-    var v = $("ck-view-board"); v.textContent = "";
+    var v = $("ck-view-board");
     var anyTask = S.model.lanes.some(function (l) { return l.count > 0; });
-    if (!anyTask) { v.appendChild(emptyState("No tasks yet.", "This board populates as instances propose, claim, and complete work.")); return; }
-    // A5: mobile-only top-blockers strip (shows tasks that block the most others)
-    var blockerTasks = Object.values(S.model.byId).filter(function(t) { return t.blocksCount > 0 && t.status !== "done" && t.status !== "failed" && t.status !== "abandoned"; });
-    blockerTasks.sort(function(a, b) { return b.blocksCount - a.blocksCount; });
+    if (!anyTask) { v.textContent = ""; v.appendChild(emptyState("No tasks yet.", "This board populates as instances propose, claim, and complete work.")); return; }
+    var list = v.querySelector(".ck-board-list");
+    if (!list) { v.textContent = ""; list = el("div", "ck-board-list"); v.appendChild(list); }
+    var oldStrip = v.querySelector(".ck-blockers-strip"); if (oldStrip) oldStrip.remove();
+    var blockerTasks = Object.values(S.model.byId).filter(function (t) { return t.blocksCount > 0 && t.status !== "done" && t.status !== "failed" && t.status !== "abandoned"; });
+    blockerTasks.sort(function (a, b) { return b.blocksCount - a.blocksCount; });
     if (blockerTasks.length > 0) {
       var strip = el("div", "ck-blockers-strip");
       strip.appendChild(el("div", "ck-blockers-title", "Top blockers"));
-      blockerTasks.slice(0, 3).forEach(function(t) {
+      blockerTasks.slice(0, 3).forEach(function (t) {
         var row = el("div", "ck-blocker-row");
         row.appendChild(el("span", "ck-blocker-count", t.blocksCount + "↓"));
         row.appendChild(el("span", "ck-blocker-title", t.title));
-        (function(id) { row.onclick = function() { openDrawer(id); }; })(t.id);
+        (function (id) { row.onclick = function () { openDrawer(id); }; })(t.id);
         strip.appendChild(row);
       });
-      v.appendChild(strip);
+      v.insertBefore(strip, list);
     }
-    S.model.lanes.forEach(function (lane) {
-      if (lane.count === 0 && lane.group !== "active") return;
-      var laneEl = el("div", "ck-lane" + (S.openLanes[lane.status] ? " open" : ""));
-      var head = el("div", "ck-lane-head");
-      head.appendChild(el("span", "caret", "▶"));
-      var dot = el("span", "ck-lane-dot"); dot.style.background = laneDotColor(lane.group); head.appendChild(dot);
-      head.appendChild(el("span", "ck-lane-label", lane.label));
-      head.appendChild(el("span", "ck-lane-count", String(lane.count)));
-      head.onclick = function () { if (S.openLanes[lane.status]) delete S.openLanes[lane.status]; else S.openLanes[lane.status] = 1; laneEl.classList.toggle("open"); };
-      laneEl.appendChild(head);
-      var body = el("div", "ck-lane-body");
-      lane.tasks.forEach(function (task) { body.appendChild(chip(task)); });
-      laneEl.appendChild(body);
-      v.appendChild(laneEl);
-    });
+    var lanes = S.model.lanes.filter(function (lane) { return !(lane.count === 0 && lane.group !== "active"); });
+    reconcileChildren(list, lanes,
+      function (lane) { return lane.status; },
+      function (lane) {
+        var laneEl = el("div", "ck-lane" + (S.openLanes[lane.status] ? " open" : ""));
+        var head = el("div", "ck-lane-head");
+        head.appendChild(el("span", "caret", "▶"));
+        var dot = el("span", "ck-lane-dot"); dot.style.background = laneDotColor(lane.group); head.appendChild(dot);
+        head.appendChild(el("span", "ck-lane-label", lane.label));
+        head.appendChild(el("span", "ck-lane-count", String(lane.count)));
+        (function (st, le) { head.onclick = function () { if (S.openLanes[st]) delete S.openLanes[st]; else S.openLanes[st] = 1; le.classList.toggle("open"); }; })(lane.status, laneEl);
+        laneEl.appendChild(head);
+        var body = el("div", "ck-lane-body"); laneEl.appendChild(body);
+        reconcileChips(body, lane.tasks);
+        return laneEl;
+      },
+      function (node, lane) {
+        node.className = "ck-lane" + (S.openLanes[lane.status] ? " open" : "");
+        var cnt = node.querySelector(".ck-lane-count"); if (cnt) cnt.textContent = String(lane.count);
+        var body = node.querySelector(".ck-lane-body"); if (body) reconcileChips(body, lane.tasks);
+      });
   }
   function chip(task) {
     var ls = leaseState({ claimedAt: task.claimed_at, leaseExpiresAt: task.lease_expires_at, clientNow: clientNow(), offset: S.leaseOffset });
@@ -1284,53 +1528,58 @@ const COCKPIT_SCRIPT = String.raw`
     return c;
   }
 
+  function feedRowEl(e, now) {
+    var row = el("div", "ck-feed-row");
+    if (e.kind === "transition" && e.toStatus === "blocked") row.classList.add("to-blocked");
+    row.appendChild(el("span", "ck-feed-time", relTime(e.ts, now)));
+    row.appendChild(el("span", "ck-feed-kind " + e.kind, feedKindLabel(e.kind)));
+    var text = el("span", "ck-feed-text");
+    var title = (S.model.byId[e.taskId] && S.model.byId[e.taskId].title) || e.taskId;
+    text.appendChild(el("b", null, title));
+    var suffix = feedSuffix(e); if (suffix) text.appendChild(document.createTextNode(" " + suffix));
+    row.appendChild(text);
+    (function (id) { row.onclick = function () { openDrawer(id); }; })(e.taskId);
+    row.style.cursor = "pointer";
+    return row;
+  }
   function renderFeed() {
-    var v = $("ck-view-feed"); v.textContent = "";
-    // Consume pending delta captured in onPlanUpdate (before async refetch)
-    if (S.feedPrevLen !== null) {
-      S.feedNewCount += Math.max(0, S.feed.length - S.feedPrevLen);
-      S.feedPrevLen = null;
-    }
-    // Filter row
+    var v = $("ck-view-feed");
+    if (S.feedPrevLen !== null) { S.feedNewCount += Math.max(0, S.feed.length - S.feedPrevLen); S.feedPrevLen = null; }
+    var frowOld = v.querySelector(".ck-feed-filters"); if (frowOld) frowOld.remove();
     var frow = el("div", "ck-feed-filters");
-    [["all", "All"], ["handoffs", "Handoffs"], ["stalls", "Stalls/Blocks"]].forEach(function(f) {
+    [["all", "All"], ["handoffs", "Handoffs"], ["stalls", "Stalls/Blocks"]].forEach(function (f) {
       var btn = el("button", "ck-feed-fbtn" + (S.feedFilter === f[0] ? " active" : ""), f[1]);
-      (function(key) { btn.onclick = function() { S.feedFilter = key; renderFeed(); }; })(f[0]);
+      (function (key) { btn.onclick = function () { S.feedFilter = key; renderFeed(); }; })(f[0]);
       frow.appendChild(btn);
     });
-    v.appendChild(frow);
-    // Filter events
-    var filtered = S.feed.filter(function(e) {
+    v.insertBefore(frow, v.firstChild);
+    var filtered = S.feed.filter(function (e) {
       if (S.feedFilter === "handoffs") return e.kind === "handoff";
       if (S.feedFilter === "stalls") return e.kind === "lease_expired" || (e.kind === "transition" && e.toStatus === "blocked");
       return true;
     });
-    if (!filtered.length) { v.appendChild(emptyState("No activity yet.", "Claims, transitions, handoffs and reclaims stream here as the graph changes.")); return; }
-    // N new pill (sticky, shows when new items arrived while scrolled)
+    var pillOld = v.querySelector(".ck-feed-new-pill"); if (pillOld) pillOld.remove();
+    var list = v.querySelector(".ck-feed-list");
+    if (!filtered.length) {
+      if (list) list.remove();
+      var emOld = v.querySelector(".ck-empty"); if (emOld) emOld.remove();
+      v.appendChild(emptyState("No activity yet.", "Claims, transitions, handoffs and reclaims stream here as the graph changes."));
+      return;
+    }
+    var em2 = v.querySelector(".ck-empty"); if (em2) em2.remove();
+    if (!list) { list = el("div", "ck-feed-list"); v.appendChild(list); }
     if (S.feedNewCount > 0) {
       var pill = el("div", "ck-feed-new-pill");
       var pbtn = el("button", null, "↑ " + S.feedNewCount + " new");
-      pbtn.onclick = function() { S.feedNewCount = 0; v.scrollTop = 0; renderFeed(); };
+      pbtn.onclick = function () { S.feedNewCount = 0; v.scrollTop = 0; renderFeed(); };
       pill.appendChild(pbtn);
-      v.appendChild(pill);
+      v.insertBefore(pill, list);
     }
     var now = clientNow();
-    // newest first for the ticker reading order
-    for (var i = filtered.length - 1; i >= 0; i--) {
-      var e = filtered[i];
-      var row = el("div", "ck-feed-row");
-      if (e.kind === "transition" && e.toStatus === "blocked") row.classList.add("to-blocked");
-      row.appendChild(el("span", "ck-feed-time", relTime(e.ts, now)));
-      row.appendChild(el("span", "ck-feed-kind " + e.kind, feedKindLabel(e.kind)));
-      var text = el("span", "ck-feed-text");
-      var title = (S.model.byId[e.taskId] && S.model.byId[e.taskId].title) || e.taskId;
-      var b = el("b", null, title); text.appendChild(b);
-      var suffix = feedSuffix(e); if (suffix) text.appendChild(document.createTextNode(" " + suffix));
-      row.appendChild(text);
-      (function (id) { row.onclick = function () { openDrawer(id); }; })(e.taskId);
-      row.style.cursor = "pointer";
-      v.appendChild(row);
-    }
+    var ordered = filtered.slice().reverse();
+    reconcileChildren(list, ordered, function (e) { return e.key || feedKey(e); },
+      function (e) { return feedRowEl(e, now); },
+      function (node, e) { var t = node.querySelector(".ck-feed-time"); if (t) t.textContent = relTime(e.ts, now); });
   }
   function feedKindLabel(k) { return k === "lease_expired" ? "reclaim" : k === "transition" ? "moved" : k; }
   function feedSuffix(e) {
@@ -1342,9 +1591,10 @@ const COCKPIT_SCRIPT = String.raw`
     return "";
   }
 
-  // ========== DAG (desktop only) ==========
+  // ========== DAG ==========
   function renderDagIfVisible() {
-    if (window.innerWidth < 820) return;
+    // M1: render on mobile too — the Graph tab + SVG are now available ≤819px
+    // (was gated to desktop). Only the active-view guard remains.
     if (S.activeView !== "dag") return;
     renderDag();
   }
@@ -1495,12 +1745,10 @@ const COCKPIT_SCRIPT = String.raw`
 
   // ========== live updates ==========
   function scheduleRefetch() {
-    if (S.demo) return;
     if (S.refetchTimer) return;
     S.refetchTimer = setTimeout(function () { S.refetchTimer = null; loadData(renderAll); }, 350);
   }
   function onPlanUpdate(evt) {
-    if (S.demo) return;
     setConn(false); setTimeout(function(){ setConn(true); }, 600);
     // A newly-created project has an id that never matches S.projectId, so the
     // projectId early-return below would skip it — and the picker is otherwise
@@ -1519,21 +1767,23 @@ const COCKPIT_SCRIPT = String.raw`
     }
     scheduleRefetch();
   }
-  function onReconnect() { if (S.demo) return; loadData(renderAll); setConn(true); }
-  function setConn(live) { var c = $("ck-conn"); if (!c) return; c.classList.toggle("stale", !live); $("ck-conn-text").textContent = S.demo ? "demo" : (live ? "live" : "syncing…"); }
+  function onReconnect() { loadData(renderAll); setConn(true); }
+  function setConn(live) { var c = $("ck-conn"); if (!c) return; c.classList.toggle("stale", !live); $("ck-conn-text").textContent = (live ? "live" : "syncing…"); }
 
   // ========== project picker ==========
   function loadProjects() {
     fetch("/plan-projects").then(function (r) { return r.ok ? r.json() : { projects: [] }; }).then(function (j) {
       var sel = $("ck-project"); sel.textContent = "";
-      var demoOpt = document.createElement("option"); demoOpt.value = "__demo__"; demoOpt.textContent = "▸ DEMO — Acme Platform"; sel.appendChild(demoOpt);
-      (j.projects || []).forEach(function (p) { var o = document.createElement("option"); o.value = p.id; o.textContent = p.title + " (" + p.taskCount + ")"; sel.appendChild(o); });
-      sel.value = S.projectId;
+      var projects = j.projects || [];
+      projects.forEach(function (p) { var o = document.createElement("option"); o.value = p.id; o.textContent = p.title + " (" + p.taskCount + ")"; sel.appendChild(o); });
+      // No demo fallback anymore: on first load (or after deleting the selected
+      // plan) adopt the first real plan so the board isn't empty.
+      if (!S.projectId && projects.length) { setProject(projects[0].id); return; }
+      sel.value = S.projectId || "";
     }).catch(function () {});
   }
   function setProject(pid) {
-    S.projectId = pid; S.demo = (pid === "__demo__"); S.openLanes = null; closeDrawer();
-    $("ck-demo-flag").style.display = S.demo ? "" : "none";
+    S.projectId = pid; S.openLanes = null; closeDrawer();
     if (_delArmTimer) { clearTimeout(_delArmTimer); _delArmTimer = null; } setDelArmed(false); // disarm delete on plan switch
     setConn(true);
     loadData(renderAll);
@@ -1642,17 +1892,129 @@ const COCKPIT_SCRIPT = String.raw`
   }
 
   // Launch-Referee: parameterless POST (no request input reaches the spawn argv server-side).
+  // After the 200 "launching…", the button does NOT just re-enable on a timer (the old "launching…"
+  // black hole) — it POLLS the roster until REFEREE comes ONLINE and resolves to ✓ seated / ✗ not
+  // seated. The roster source is GET /users (presence-backed isOnline — flips the moment the spawn
+  // joins + polls), the same "watch the roster" signal the operator was told to watch by hand.
+  var REF_SEAT_TIMEOUT_MS = 45000; // ~45s budget for the spawn to boot, join, and go online
+  var REF_SEAT_POLL_MS = 2000;     // roster re-check cadence
+  function resetLaunchRefBtn(b, delayMs) {
+    setTimeout(function () { if (b) { b.disabled = false; b.textContent = "+ Referee"; } }, delayMs || 0);
+  }
+  // Poll /users until a REFEREE entry reads online, or the budget elapses. Defensive: a transient
+  // fetch failure just retries until the deadline (never wedges the button).
+  function pollRefereeSeated(b) {
+    var deadline = Date.now() + REF_SEAT_TIMEOUT_MS;
+    function giveUp() {
+      if (b) b.textContent = "✗ not seated";
+      condMsg("Referee didn't seat — check launch log.", true);
+      resetLaunchRefBtn(b, 4000);
+    }
+    function tick() {
+      fetch("/users")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          var seated = !!(j && Array.isArray(j.users) && j.users.some(function (u) { return u && u.name === "REFEREE" && u.online; }));
+          if (seated) {
+            if (b) b.textContent = "✓ Referee seated";
+            condMsg("Referee seated.", false);
+            resetLaunchRefBtn(b, 2500);
+          } else if (Date.now() >= deadline) {
+            giveUp();
+          } else {
+            setTimeout(tick, REF_SEAT_POLL_MS);
+          }
+        })
+        .catch(function () { if (Date.now() >= deadline) giveUp(); else setTimeout(tick, REF_SEAT_POLL_MS); });
+    }
+    setTimeout(tick, REF_SEAT_POLL_MS); // first roster check after one interval — give the spawn a beat
+  }
   function launchReferee() {
     var b = $("ck-launch-ref");
     if (b) { b.disabled = true; b.textContent = "launching…"; }
     fetch("/admin-launch-referee", { method: "POST", headers: adminHeaders })
-      .then(function (r) { return r.json().catch(function () { return {}; }); })
-      .then(function (data) {
-        if (data && data.error) alert(data.error);
-        condMsg(data && data.message ? data.message : "Referee launching — watch the roster (~30–45s).", !!(data && data.error));
+      .then(function (r) {
+        if (!r.ok) {
+          // Launch rejected server-side (4xx/5xx) — surface it, do NOT poll the roster.
+          r.json().catch(function () { return {}; }).then(function (data) {
+            if (data && data.error) alert(data.error);
+            condMsg(data && data.error ? data.error : "Referee launch rejected.", true);
+          });
+          if (b) b.textContent = "✗ launch rejected";
+          resetLaunchRefBtn(b, 4000);
+          return;
+        }
+        // A 200 from this endpoint does NOT mean the spawn succeeded: handleLaunchReferee ALWAYS
+        // replies 200 and carries success in the BODY {ok}. An immediate server-side failure
+        // (ok:false @ 200, e.g. "spawn produced no pid") must give INSTANT feedback — branch on it
+        // here instead of degrading into the ~45s roster poll that ends in a misleading "not seated".
+        return r.json().catch(function () { return {}; }).then(function (data) {
+          if (data && data.ok === false) {
+            condMsg(data.message || data.error || "Referee launch failed.", true);
+            if (b) b.textContent = "✗ launch failed";
+            resetLaunchRefBtn(b, 4000);
+            return;
+          }
+          // ok (true) → accepted; watch the roster for REFEREE to come online.
+          condMsg(data && data.message ? data.message : "Referee launching — watching the roster (~45s)…", false);
+          pollRefereeSeated(b);
+        });
       })
-      .catch(function () { condMsg("Referee launch request failed.", true); })
-      .then(function () { setTimeout(function () { if (b) { b.disabled = false; b.textContent = "+ Referee"; } }, 4000); });
+      .catch(function () {
+        condMsg("Referee launch request failed.", true);
+        if (b) b.textContent = "✗ launch rejected";
+        resetLaunchRefBtn(b, 4000);
+      });
+  }
+
+  // Item 3 (+Referee dialog): the +Referee button opens this dialog (channel / draft-loop /
+  // builder count) and submits to /admin-referee-launch (data-parameterized; argv stays fixed).
+  function openRefDialog() {
+    var dlg = $("ck-refdlg"); if (!dlg) return;
+    var msg = $("ck-refdlg-msg"); if (msg) { msg.textContent = ""; msg.classList.remove("err"); }
+    var sel = $("ck-refdlg-loop");
+    if (sel) {
+      while (sel.options.length > 1) sel.remove(1); // keep the "(none)" option, drop stale loops
+      fetch("/loop-admin-list", { headers: adminHeaders })
+        .then(function (r) { return r.ok ? r.json() : { loops: [] }; })
+        .then(function (j) {
+          (j.loops || []).filter(function (l) { return l.status === "draft"; }).forEach(function (l) {
+            var o = document.createElement("option");
+            o.value = l.id;
+            o.textContent = (l.goal || l.label || l.id).slice(0, 60);
+            sel.appendChild(o);
+          });
+        })
+        .catch(function () {});
+    }
+    dlg.hidden = false;
+  }
+  function closeRefDialog() { var d = $("ck-refdlg"); if (d) d.hidden = true; }
+  function submitRefLaunch() {
+    var go = $("ck-refdlg-go"); var msg = $("ck-refdlg-msg");
+    var channel = (($("ck-refdlg-channel") || {}).value || "").trim();
+    var loopId = ($("ck-refdlg-loop") || {}).value || "";
+    var builders = parseInt(($("ck-refdlg-builders") || {}).value, 10);
+    if (!Number.isFinite(builders) || builders < 0) builders = 0;
+    var body = { channel: channel, builder_count: builders };
+    if (loopId) body.loop_id = loopId;
+    if (go) go.disabled = true;
+    fetch("/admin-referee-launch", { method: "POST", headers: adminHeaders, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); })
+      .then(function (res) {
+        if (go) go.disabled = false;
+        if (!res.ok || (res.body && res.body.error)) {
+          if (msg) { msg.textContent = (res.body && res.body.error) || "Launch rejected."; msg.classList.add("err"); }
+          return;
+        }
+        closeRefDialog();
+        condMsg((res.body && res.body.referee && res.body.referee.message) || "Referee + builders launching…", false);
+        pollRefereeSeated($("ck-launch-ref"));
+      })
+      .catch(function () {
+        if (go) go.disabled = false;
+        if (msg) { msg.textContent = "Launch request failed."; msg.classList.add("err"); }
+      });
   }
 
   // Poll /admin-conductor-status only while the cockpit is the active mode.
@@ -1787,7 +2149,10 @@ const COCKPIT_SCRIPT = String.raw`
   }
 
   function initConductor() {
-    var lr = $("ck-launch-ref"); if (lr) lr.addEventListener("click", launchReferee);
+    var lr = $("ck-launch-ref"); if (lr) lr.addEventListener("click", openRefDialog);
+    var rdc = $("ck-refdlg-cancel"); if (rdc) rdc.addEventListener("click", closeRefDialog);
+    var rdg = $("ck-refdlg-go"); if (rdg) rdg.addEventListener("click", submitRefLaunch);
+    var rdo = $("ck-refdlg"); if (rdo) rdo.addEventListener("click", function (e) { if (e.target === rdo) closeRefDialog(); });
     var head = $("ck-cond-head"); if (head) head.addEventListener("click", function () { $("ck-cond").classList.toggle("open"); });
     var startB = $("ck-cond-start"); if (startB) startB.addEventListener("click", function () { condStartStop(true); });
     var stopB = $("ck-cond-stop"); if (stopB) stopB.addEventListener("click", function () { condStartStop(false); });
@@ -1959,8 +2324,47 @@ const COCKPIT_SCRIPT = String.raw`
       var card = el("div", "ck-appr-card");
       var head = el("div", "ck-appr-cardhead");
       head.appendChild(el("span", "ck-appr-name", a.loop_id || "loop"));
+      // Item 2 (loop-goal): tag the gate kind so the operator sees a pre-run CRITERIA gate
+      // vs an in-run ESCALATION gate (same widget, different action).
+      var isCriteria = a.kind === "criteria_gate";
+      head.appendChild(el("span", "ck-appr-kind", isCriteria ? "criteria" : "escalation"));
       head.appendChild(el("span", "ck-appr-badge", a.status || "pending"));
       card.appendChild(head);
+      if (isCriteria) {
+        // Pre-run criteria gate: show the Referee's proposed acceptance bundle, editable,
+        // and Approve → run (apply criteria) / Reject → redraft (back to draft).
+        var c = a.criteria || {};
+        card.appendChild(el("div", "ck-appr-reason", a.reason || "Approve the proposed acceptance criteria"));
+        card.appendChild(el("div", "ck-appr-meta", "Rubric (editable):"));
+        var rubric = document.createElement("textarea");
+        rubric.className = "ck-appr-edit";
+        rubric.value = c.rubric || "";
+        card.appendChild(rubric);
+        var tgtWrap = el("div", "ck-appr-meta"); tgtWrap.textContent = "Completeness target: ";
+        var tgt = document.createElement("input");
+        tgt.type = "number"; tgt.step = "0.05"; tgt.min = "0"; tgt.max = "1"; tgt.className = "ck-appr-edit-num";
+        if (typeof c.completeness_target === "number") tgt.value = String(c.completeness_target);
+        tgtWrap.appendChild(tgt);
+        card.appendChild(tgtWrap);
+        if (typeof a.created_at === "number") card.appendChild(el("div", "ck-appr-meta", "proposed " + relTime(a.created_at, now)));
+        var cact = el("div", "ck-appr-actions");
+        var okc = el("button", "ck-appr-btn approve", "Approve → run"); okc.setAttribute("type", "button");
+        (function (id, plateau) {
+          okc.onclick = function () {
+            var crit = { rubric: rubric.value };
+            if (tgt.value !== "") crit.completeness_target = parseFloat(tgt.value);
+            if (plateau) crit.plateau = plateau;
+            apprResolve(id, "approve", okc, crit);
+          };
+        })(a.id, c.plateau);
+        cact.appendChild(okc);
+        var noc = el("button", "ck-appr-btn reject", "Reject → redraft"); noc.setAttribute("type", "button");
+        (function (id) { noc.onclick = function () { apprResolve(id, "reject", noc); }; })(a.id);
+        cact.appendChild(noc);
+        card.appendChild(cact);
+        list.appendChild(card);
+        return;
+      }
       var v = a.verdict;
       if (v) {
         var vrow = el("div", "ck-appr-verdict");
@@ -1987,9 +2391,12 @@ const COCKPIT_SCRIPT = String.raw`
       list.appendChild(card);
     });
   }
-  function apprResolve(id, decision, btn) {
+  function apprResolve(id, decision, btn, criteria) {
     if (btn) btn.disabled = true;
-    fetch("/loop-approval-resolve", { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: id, decision: decision, by: "operator" }) })
+    var payload = { id: id, decision: decision, by: "operator" };
+    // Item 2: edit-then-approve on a criteria gate sends the operator's edited criteria.
+    if (criteria) payload.criteria = criteria;
+    fetch("/loop-approval-resolve", { method: "POST", headers: adminHeaders, body: JSON.stringify(payload) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); })
       .then(function (res) {
         if (!res.ok || (res.body && res.body.error)) apprMsg((res.body && res.body.error) || "Approval action rejected.", true);
@@ -2001,6 +2408,18 @@ const COCKPIT_SCRIPT = String.raw`
   }
   function initAppr() {
     var head = $("ck-appr-head"); if (head) head.addEventListener("click", function () { $("ck-appr").classList.toggle("open"); });
+    // Item 2 (loop-goal): operator authors a draft goal loop (one sentence + auto-approve?).
+    var newLoop = $("ck-appr-newloop");
+    if (newLoop) newLoop.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var goal = window.prompt("Goal for the new loop (one sentence):");
+      if (!goal || !goal.trim()) return;
+      var auto = window.confirm("Auto-approve the proposed criteria (skip the gate) for this loop?");
+      fetch("/loop-admin-create-draft", { method: "POST", headers: adminHeaders, body: JSON.stringify({ goal: goal.trim(), auto_approve: auto }) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function () { loadLoopCtl(); loadAppr(); apprMsg("", false); })
+        .catch(function () { apprMsg("Could not create the goal loop.", true); });
+    });
     // Pinned badge → jump to the Loop page, expand approvals, scroll them into view (last panel).
     var badge = $("ck-appr-badge");
     if (badge) badge.addEventListener("click", function () {
@@ -2034,8 +2453,42 @@ const COCKPIT_SCRIPT = String.raw`
 
   function termSetStatus(msg) { TERM.status = msg || ""; setTermHeaderLabel(); }
 
+  // B3 FIX A — guarded re-fit. On mobile the terminal overlay's height (dvh/flex/min-height:0) isn't
+  // resolved the same frame it's shown, so a synchronous fit() under-sizes the grid and .xterm-viewport
+  // never overflows ("won't scroll"; scrollTop= is a silent no-op). Re-fit on the next frames, guarded
+  // until the host (.ck-term-body) actually has height. Canonical xterm fit-on-show (#4338/#3647).
+  function termFitSafe() {
+    try {
+      var host = $("ck-term-body");
+      if (!host || host.clientHeight < 8 || host.clientWidth < 8) return false;
+      if (TERM.fit && TERM.term) { TERM.fit.fit(); termSendResize(); }
+      return true;
+    } catch (e) { return false; }
+  }
+  function termRefitGuarded(tries) {
+    requestAnimationFrame(function () {
+      if (!termFitSafe() && tries > 0) termRefitGuarded(tries - 1);
+    });
+  }
+
   function openTerminal(callsign) {
     if (typeof Terminal === "undefined") { termSetStatus("xterm.js not loaded"); return; }
+    // #2 INVARIANT (call-site guard): the OPERATOR is NEVER a terminal target on ANY
+    // surface (rail card OR row-zero OR a stray ?as=Operator). Operator has no tmux session — a WS
+    // attach threw the raw "ticket failed: No live tmux session for callsign Operator" Operator saw.
+    // The REFEREE is intentionally NOT guarded here: it is a live tmux-backed agent and Operator
+    // watches its session (Wave (b) revert of afae30d). #3: graceful hint instead of a raw error.
+    if (isOperator(callsign)) {
+      // Stay in Cockpit — do NOT switch to Radio here (that would eject the operator,
+      // fighting §D's default-land-in-cockpit). Graceful hint only.
+      closeTerminal();
+      TERM.callsign = callsign; TERM.status = "operator view — no agent terminal";
+      setTermHeaderLabel();
+      var _body = $("ck-term-body");
+      if (_body) { _body.textContent = ""; _body.appendChild(el("div", "ck-term-hint", "“" + callsign + "” is the operator, not an agent — there is no terminal here. Open a live agent from the Right Now rail to watch its session.")); }
+      var _ov = $("ck-term-overlay"); if (_ov) { _ov.classList.add("open"); _ov.setAttribute("aria-hidden", "false"); }
+      return;
+    }
     // Tear down any existing session first (one panel at a time).
     closeTerminal();
     // closeTerminal() armed the intentional-close guard; clear it so drops in THIS
@@ -2057,7 +2510,20 @@ const COCKPIT_SCRIPT = String.raw`
     $("ck-term-overlay").setAttribute("aria-hidden", "false");
 
     // Build the xterm instance.
-    var term = new Terminal({ convertEol: false, cursorBlink: true, fontFamily: "IBM Plex Mono, monospace", fontSize: 13, theme: { background: "#FEFCF6", foreground: "#423F37", cursor: "#C9501A", cursorAccent: "#FEFCF6", selectionBackground: "#E2D6BF", selectionForeground: "#1A1C18", black: "#3A3A33", red: "#B23A1A", green: "#58721D", yellow: "#8D6110", blue: "#3D6577", magenta: "#8A4E63", cyan: "#2C7568", white: "#B0561B", brightBlack: "#EDE6D5", brightRed: "#C34E19", brightGreen: "#647C27", brightYellow: "#926D24", brightBlue: "#4B7A8D", brightMagenta: "#9C6277", brightCyan: "#338072", brightWhite: "#B23A1A" } });
+    // Editorial Paper terminal theme — Operator's custom palette, restored byte-intact.
+    // The mirrored content is mostly Claude Code's TUI, which drives white[37m] for its
+    // status/tool-call lines (highest-volume slot, confirmed live: 45/34/18 hits) and
+    // brightWhite[97m] for its ⏺ bullets. Those two slots assume a DARK terminal, so on
+    // this paper bg they washed out (were orange #B0561B / red #B23A1A). TARGETED fix:
+    // remap ONLY those two to dark, AA-readable-on-paper ink — white #5E5C52 (~6:1),
+    // brightWhite #2B2A24 (~12:1). Every other slot is Operator's original value untouched
+    // ([90m] is negligible — 1/0/0 live — so brightBlack #EDE6D5 stays).
+    // Mobile fixed-window mirror (B3-REDO / path A): a smaller font fits more of Claude's alt-screen TUI
+    // after the FIX-A re-fit (no scrollback exists, so "more rows visible" is the whole win). Desktop keeps
+    // 13 for legibility; ≤820px (the B4-locked window) steps down. Operator tunes the px live. Paper theme below
+    // is unchanged (B1 / B1-REDO contrast work preserved).
+    var _ckTermFont = (window.matchMedia && matchMedia("(max-width: 820px)").matches) ? 11 : 13;
+    var term = new Terminal({ convertEol: false, cursorBlink: true, fontFamily: "IBM Plex Mono, monospace", fontSize: _ckTermFont, theme: { background: "#FEFCF6", foreground: "#423F37", cursor: "#C9501A", cursorAccent: "#FEFCF6", selectionBackground: "#E2D6BF", selectionForeground: "#1A1C18", black: "#3A3A33", red: "#B23A1A", green: "#58721D", yellow: "#8D6110", blue: "#3D6577", magenta: "#8A4E63", cyan: "#2C7568", white: "#5E5C52", brightBlack: "#EDE6D5", brightRed: "#C34E19", brightGreen: "#647C27", brightYellow: "#926D24", brightBlue: "#4B7A8D", brightMagenta: "#9C6277", brightCyan: "#338072", brightWhite: "#2B2A24" } });
     TERM.term = term;
     try {
       var FitCtor = (window.FitAddon && window.FitAddon.FitAddon) ? window.FitAddon.FitAddon : null;
@@ -2065,6 +2531,21 @@ const COCKPIT_SCRIPT = String.raw`
     } catch (e) { TERM.fit = null; }
     term.open($("ck-term-body"));
     try { if (TERM.fit) TERM.fit.fit(); } catch (e) {}
+    // B3 FIX A (v4): the sync fit() above runs before the mobile overlay height settles, so re-fit on
+    // the next frames (guarded until the host has real height). Also re-fit on the first WS bytes below
+    // (buffer fill is what makes .xterm-viewport overflow / become scrollable).
+    termRefitGuarded(12);
+    // B3-REDO v2 — SWIPE→WHEEL FORWARDER (restores Operator's pre-wave swipe-scroll, deterministically).
+    // The pane mirrors Claude's ALT-screen TUI (no xterm scrollback). Pre-wave, a finger-swipe forwarded
+    // as mouse-WHEEL events to Claude's own pager (mouse-tracking is on), which repaints earlier output
+    // into the mirror — THAT was the scroll. B4's freeze killed it. Here we forward it explicitly instead
+    // of relying on fragile native page-pan: accumulate vertical drag on .ck-term-body and emit one SGR
+    // wheel tick per STEP px over the WS input path. finger DOWN ⇒ wheel-UP = history-back (iOS-natural).
+    // Bound ONCE on the persistent overlay body; reads TERM.* live so it follows the current terminal.
+    // Non-passive + preventDefault is JUSTIFIED: we consume the gesture to drive the app (.ck-term-body
+    // is touch-action:none). Desktop has a real mouse wheel already, so this is touch-only by nature.
+    bindTermSwipeOnce();
+    bindTermKeysOnce(); // M2: wire the mobile helper keys (idempotent)
 
     // Mint a single-use ticket (browser-gated by the cockpit token), then open WS.
     fetch("/terminal-ticket", { method: "POST", headers: adminHeaders, body: JSON.stringify({ callsign: callsign }) })
@@ -2083,6 +2564,7 @@ const COCKPIT_SCRIPT = String.raw`
     var ws = new WebSocket(proto + "//" + location.host + "/terminal?ticket=" + encodeURIComponent(ticket));
     ws.binaryType = "arraybuffer";
     TERM.ws = ws;
+    var _firstData = true; // B3: re-fit once real bytes fill the buffer (that overflow makes it scrollable)
     ws.onopen = function () {
       TERM.reconnectDelay = 0; // healthy connect — reset the backoff ladder
       termSetStatus("connected");
@@ -2103,6 +2585,7 @@ const COCKPIT_SCRIPT = String.raw`
         // Binary pane output.
         if (TERM.term) TERM.term.write(new Uint8Array(data));
       }
+      if (_firstData) { _firstData = false; termRefitGuarded(6); }
     };
     ws.onclose = function () {
       if (TERM.closing || ws !== TERM.ws) { termSetStatus("disconnected"); return; } // intentional teardown OR orphaned ws — stay closed
@@ -2154,6 +2637,78 @@ const COCKPIT_SCRIPT = String.raw`
     try { TERM.ws.send(JSON.stringify({ type: "resize", cols: TERM.term.cols, rows: TERM.term.rows })); } catch (e) {}
   }
 
+  // M2: send a raw key sequence to the agent over the same WS as typed input, honoring
+  // the read-only guard (the server also drops input in read-only mode).
+  function termSendKey(seq) {
+    if (TERM.readonly) return;
+    if (TERM.ws && TERM.ws.readyState === 1) TERM.ws.send(seq);
+  }
+  var _termSwipeBound = false;
+  // B3-REDO v2: forward a single-finger vertical swipe on the terminal as SGR mouse-wheel events to
+  // Claude's pager (mouse-tracking on → it repaints history into the alt-screen mirror). Bound ONCE on
+  // the persistent .ck-term-body; reads TERM.* live so it follows the current terminal. Touch-only;
+  // non-passive preventDefault is justified (.ck-term-body is touch-action:none — the gesture is ours).
+  function bindTermSwipeOnce() {
+    if (_termSwipeBound) return;
+    var host = document.getElementById("ck-term-body");
+    if (!host) return;
+    _termSwipeBound = true;
+    var lastY = 0, acc = 0, active = false;
+    var STEP = 22; // px of finger travel per wheel tick (device-tunable deltaY→tick ratio)
+    function wheel(up) {
+      if (!TERM.ws || TERM.ws.readyState !== 1 || !TERM.term) return;
+      var cols = TERM.term.cols || 80, rows = TERM.term.rows || 24;
+      var col = Math.max(1, Math.min(cols, (cols >> 1) || 1));
+      var row = Math.max(1, Math.min(rows, (rows >> 1) || 1));
+      // SGR mouse press: button 64 = wheel-up, 65 = wheel-down; press-only (M), no release byte.
+      TERM.ws.send("\x1b[<" + (up ? 64 : 65) + ";" + col + ";" + row + "M");
+    }
+    host.addEventListener("touchstart", function (e) {
+      if (e.touches.length !== 1) { active = false; return; }
+      active = true; lastY = e.touches[0].clientY; acc = 0;
+    }, { passive: true });
+    host.addEventListener("touchmove", function (e) {
+      if (!active || e.touches.length !== 1) return;
+      var y = e.touches[0].clientY; acc += (y - lastY); lastY = y;
+      while (acc >= STEP) { wheel(true); acc -= STEP; }    // finger DOWN  ⇒ history-back
+      while (acc <= -STEP) { wheel(false); acc += STEP; }  // finger UP    ⇒ toward live
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+    host.addEventListener("touchend", function () { active = false; acc = 0; }, { passive: true });
+  }
+  var _termKeysBound = false;
+  function bindTermKeysOnce() {
+    if (_termKeysBound) return;
+    var bar = document.getElementById("ck-term-keys");
+    if (!bar) return;
+    _termKeysBound = true;
+    // History scrolling is now the SWIPE forwarder (bindTermSwipeOnce), not on-screen keys.
+    // SEQ = raw control sequences a phone soft-keyboard can't send. TEXT = one-tap command
+    // shortcuts Operator drives from his phone — typed into the FOCUSED agent's terminal + Enter.
+    var SEQ = { shifttab: "\x1b[Z", tab: "\t", esc: "\x1b" };
+    var TEXT = { deploy: "deploy go\r", rejoin: "Rejoin channel\r" };
+    bar.addEventListener("click", function (e) {
+      var t = e.target;
+      var btn = (t && t.closest) ? t.closest(".ck-term-key") : null;
+      if (!btn) return;
+      var key = btn.getAttribute("data-seq");
+      if (key === "compact") { termCompactFocused(); return; } // fires the REAL per-agent /compact
+      var out = SEQ[key] != null ? SEQ[key] : TEXT[key];
+      if (out == null) return;
+      termSendKey(out);
+      try { if (TERM.term) TERM.term.focus(); } catch (e2) {} // keep the soft keyboard up
+    });
+  }
+  // Compact the focused agent via the proven F1 endpoint (server handles the first-/compact no-op
+  // double-tap, so one call = one real compaction). No name→sink; callsign is this terminal's.
+  function termCompactFocused() {
+    if (!TERM.callsign) return;
+    fetch("/admin-compact-agent", { method: "POST", headers: adminHeaders, body: JSON.stringify({ callsign: TERM.callsign }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) { if (data && data.error) alert(data.error); })
+      .catch(function () {});
+  }
+
   function closeTerminal() {
     // Arm the intentional-close guard BEFORE .close()ing the ws so its onclose sees
     // TERM.closing and does NOT schedule a reconnect; cancel any pending reconnect
@@ -2181,7 +2736,7 @@ const COCKPIT_SCRIPT = String.raw`
     if (!document.getElementById("cockpit")) return;
     // E1: Live/Plan toggle
     document.querySelectorAll(".ck-main-btn").forEach(function(b) {
-      b.addEventListener("click", function() { switchMainView(b.getAttribute("data-main")); });
+      b.addEventListener("click", function() { switchMainView(b.getAttribute("data-main"), true); });
     });
     document.querySelectorAll(".ck-tab").forEach(function (t) { t.addEventListener("click", function () { switchView(t.getAttribute("data-view")); }); });
     $("ck-drawer-close").addEventListener("click", closeDrawer);
@@ -2196,9 +2751,15 @@ const COCKPIT_SCRIPT = String.raw`
     initLoopCtl(); // Phase 2: operator loops panel wiring + status poll
     initAppr(); // Phase 5 (integration): HITL approvals panel wiring + status poll
     initTerminal(); // Interactive terminal panel wiring (clickable rail names)
-    // E1: Default to Loop view; Plan loads lazily. Loop surfaces are driven by
-    // initLoopCtl/initAppr above (control + schedule + approvals self-poll).
-    document.body.classList.add("ck-main-loop");
+    // §D (a) — LAND ON THE STRIP: the cockpit's only human viewer is the operator, and the
+    // §B FLEET strip lives in the Plan / "Right Now" view. §D got the operator INTO Cockpit,
+    // but Cockpit still defaulted to the Loop sub-view, so the strip was never seen on landing
+    // → reproduced "zero difference" (335331 A3 finding). So land on Plan by default; a
+    // DELIBERATE switch to Loop persists via "ck_main" (benign own-pane choice, mirrors
+    // "ck_mode" — NOT the "ck_viewer" POV leak). Loop surfaces still self-poll
+    // (initLoopCtl/initAppr above) and the approvals badge in the bar still links to Loop.
+    var savedMain = null; try { savedMain = localStorage.getItem("ck_main"); } catch (e) {}
+    switchMainView(savedMain === "loop" ? "loop" : "plan", false);
     window.__cockpit = {
       openTerminal: openTerminal,
       closeTerminal: closeTerminal, // radio channel-select calls this to restore chat

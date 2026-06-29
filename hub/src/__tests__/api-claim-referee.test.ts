@@ -133,7 +133,7 @@ describe("POST /claim-referee", () => {
     expect(names.filter((n) => n === "REFEREE")).toHaveLength(1);
   });
 
-  it("(6) endpoint only ever mints REFEREE — no path to claim the operator identity", async () => {
+  it("(6) endpoint only ever mints REFEREE — no path to claim operator/operator", async () => {
     const token = await registerUser(ctx, "cr-sneaky");
     // Even if the body smuggles a name, it is ignored — the endpoint hardcodes REFEREE.
     const res = await claimReferee(token, { name: "operator", oldName: "cr-sneaky" });
@@ -142,6 +142,7 @@ describe("POST /claim-referee", () => {
     expect(body.name).toBe("REFEREE");
 
     const names = await userNames();
+    expect(names).not.toContain("operator");
     expect(names).not.toContain("operator");
     expect(names).toContain("REFEREE");
   });

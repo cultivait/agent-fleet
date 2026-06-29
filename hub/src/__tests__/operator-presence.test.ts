@@ -130,7 +130,7 @@ describe("persistent operator presence (Operator)", () => {
     expect(after.queuedCount).toBe(0);
   });
 
-  it("re-asserts persistence over an Operator left non-principal/reapable by a prior admin-send auto-register", async () => {
+  it("re-asserts persistence over a Operator left non-principal/reapable by a prior admin-send auto-register", async () => {
     // Simulate the legacy path: /admin-send auto-registers a plain, reapable Operator.
     // ensureOperatorPresence must PROMOTE that record, not throw on the dup name.
     const sendRes = await fetch(`${ctx.baseUrl}/admin-send`, {
@@ -187,27 +187,27 @@ describe("operator presence — queue rehydration from the durable transcript", 
 
 // Operator parameterization: the hub's operator surfaces (default sender, channel
 // creator, read-cursor/unread) now key on OPERATOR_NAME, and the ghost-reaper exemption
-// keys on the PERSISTENT FLAG (isPersistentUser) — NOT a hardcoded name literal. So a
+// keys on the PERSISTENT FLAG (isPersistentUser) — NOT the hardcoded "Operator" literal. So a
 // deploy that sets AF_OPERATOR_NAME to any name gets an equally-protected operator. This
-// proves the kick-all/back-compat name skip is harmless: the real exemption is the flag.
-// A NON-default operator name ("Captain") is used here to exercise the parameterization.
-describe("operator presence is name-agnostic (reaper exemption = persistent flag, not a name literal)", () => {
+// proves server.ts:491's remaining "Operator" literal is a harmless back-compat skip, safe to
+// leave: the real exemption is the flag.
+describe("operator presence is name-agnostic (reaper exemption = persistent flag, not 'Operator')", () => {
   let ctx: TestContext;
   beforeEach(async () => {
     resetRouterState();
     ctx = await startTestServer();
-    ensureOperatorPresence("Captain"); // a NON-default operator name
+    ensureOperatorPresence("Operator"); // a NON-"Operator" operator name
   });
   afterEach(async () => {
     await stopTestServer(ctx);
   });
 
-  it("marks the named operator persistent and exempts it from the ghost-reaper", async () => {
-    expect(isPersistentUser("Captain")).toBe(true);
+  it("marks the ENV-named operator persistent and exempts it from the ghost-reaper", async () => {
+    expect(isPersistentUser("Operator")).toBe(true);
     await registerUser(ctx, "op-ghost-named");
     const reaped = reapGhostAgents(0); // grace 0 reaps every non-exempt user
     expect(reaped).toContain("op-ghost-named"); // control: a real ghost IS reaped
-    expect(reaped).not.toContain("Captain"); // operator survives via the flag, not the literal
-    expect(isPersistentUser("Captain")).toBe(true);
+    expect(reaped).not.toContain("Operator"); // operator survives via the flag, not the literal
+    expect(isPersistentUser("Operator")).toBe(true);
   });
 });

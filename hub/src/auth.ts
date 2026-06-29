@@ -297,7 +297,7 @@ export function setPrincipal(name: string, isPrincipal: boolean): boolean {
   return true;
 }
 
-// Operator presence: a persistent user is a virtual operator identity
+// Operator presence: a persistent user is a virtual operator identity ("Operator")
 // with no live session, bootstrapped server-side. The ghost-reaper and kick-all
 // skip persistent users so the operator is never swept like a dead agent. Set
 // ONLY by the server-side bootstrap (ensureOperatorPresence) — never a client body.

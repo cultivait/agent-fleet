@@ -19,6 +19,12 @@ export type HubEvent =
   | { type: "channel_join"; channel: string; userName: string; timestamp: number }
   | { type: "channel_leave"; channel: string; userName: string; timestamp: number }
   | { type: "channel_delete"; name: string; timestamp: number }
+  | { type: "channel_rename"; from: string; to: string; timestamp: number }
+  // Item 1 (fleet_dm): a direct message was sent. Browser-only stream (SSE) — it
+  // wakes NO agent (deliverMessage is never called for SSE), so DMs stay invisible to
+  // every agent but the recipient (who gets it via their own queue). The cockpit folds
+  // it into the operator-only Direct Messages pane, keyed by the canonical pair.
+  | { type: "dm"; from: string; to: string; pair: string; content: string; timestamp: number; image?: { data: string; mimeType: string } }
   | { type: "status"; name: string; online: boolean; timestamp: number }
   | { type: "typing"; name: string; channel: string; timestamp: number }
   | { type: "read_update"; userName: string; channel: string; timestamp: number }

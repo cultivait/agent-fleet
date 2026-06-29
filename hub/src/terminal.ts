@@ -75,27 +75,45 @@ function pruneTickets(now: number): void {
 }
 
 // Resolve the live tmux session backing a callsign, or null if none.
-// Mirrors isRegistrySessionAlive's tmux derivation: explicit "tmux:<session>"
-// control_handle, else derived "wt-<spawn_id>". Verified with `tmux has-session`
-// so a stale registry row can never mint a ticket to a dead session.
-export function resolveLiveTmuxSession(callsign: string, registry: RegistryEntry[] = dbListRegistry()): string | null {
+// The ONE tmux-session derivation for a registry row, the single source of truth every liveness
+// check routes through (resolveLiveTmuxSession, the polling reconcile sites, isRegistrySessionAlive):
+// an explicit "tmux:<session>" control_handle, ELSE the launcher-named "wt-<spawn_id>" (spawn_id == the
+// rid that names the session). null when neither is available. Deriving the spawn_id form here — not
+// just the tmux: prefix — is what lets a live row be recognized BEFORE its enrich-POST sets the handle;
+// a tmux:-prefix-only check is the blind spot that left the reconcile sites under-reaping.
+export function deriveTmuxSession(entry: RegistryEntry): string | null {
+  if (entry.control_handle?.startsWith("tmux:")) {
+    const s = entry.control_handle.slice("tmux:".length);
+    return s.length > 0 ? s : null;
+  }
+  return entry.spawn_id ? `wt-${entry.spawn_id}` : null;
+}
+
+// Iterates ALL rows for the callsign and returns the FIRST VERIFIED-LIVE tmux session (via
+// `tmux has-session`) so a stale registry row can never mint a ticket to a dead session — a
+// null/dead-handle duplicate (e.g. become_referee's leftover REFEREE row) is SKIPPED, never shadows
+// the live one: a null handle with no spawn_id derives no session (continue), and a dead handle/derived
+// session fails `tmux has-session` (continue). `hasSession` is injectable for hermetic tests.
+export function resolveLiveTmuxSession(
+  callsign: string,
+  registry: RegistryEntry[] = dbListRegistry(),
+  hasSession: (session: string) => boolean = tmuxHasSession,
+): string | null {
   // Prefer an active row; fall back to any row for the callsign.
   const rows = registry.filter((r) => r.callsign === callsign);
   if (rows.length === 0) return null;
   const ordered = [...rows.filter((r) => r.status === "active"), ...rows.filter((r) => r.status !== "active")];
   for (const entry of ordered) {
-    const session = entry.control_handle?.startsWith("tmux:")
-      ? entry.control_handle.slice("tmux:".length)
-      : entry.spawn_id
-        ? `wt-${entry.spawn_id}`
-        : null;
+    const session = deriveTmuxSession(entry);
     if (!session) continue;
-    if (tmuxHasSession(session)) return session;
+    if (hasSession(session)) return session;
   }
   return null;
 }
 
-function tmuxHasSession(session: string): boolean {
+// Exported so the startup reconcile pass (polling.ts) verifies duplicate-row liveness with the
+// SAME has-session probe the terminal resolver uses — one source of truth for "is this session live".
+export function tmuxHasSession(session: string): boolean {
   const r = spawnSync("tmux", ["has-session", "-t", session], { stdio: "ignore" });
   return r.error == null && r.status === 0;
 }
@@ -108,6 +126,83 @@ function envNoTmux(): { [key: string]: string } {
     if (v !== undefined && k !== "TMUX") env[k] = v;
   }
   return env;
+}
+
+// ── /compact injection into a live agent tmux session ──────────────────────────
+// The cockpit "Compact" button (and the operator) fire /compact at an agent by
+// TYPING it into that agent's Claude Code TUI over tmux — there is no self-/compact
+// and no harness API for it; the operator-typed slash command is the only trigger.
+//
+// The "/compact takes 2 tries" behaviour is an UPSTREAM Claude Code CLI quirk, NOT
+// a cockpit send-path bug (root cause pinned from the operator's live observation):
+// the FIRST /compact returns "compacted" INSTANTLY with no progress bar — a spurious
+// no-op — and only the SECOND /compact actually runs the real (time-taking)
+// compaction. The keystroke is delivered and processed fine; the CLI just resolves
+// the first invocation trivially. We cannot fix the CLI from here, so the button
+// makes the REAL compaction fire in one click by sending TWO full `/compact`
+// submissions:
+//   1. literal "/compact" via `send-keys -l` (so "/" et al. are typed verbatim,
+//      never interpreted as tmux key names), brief settle so the text registers
+//   2. Enter — submits the first (spurious, instant) /compact
+//   3. wait out the no-op so the prompt is clear again
+//   4. literal "/compact" again + Enter — submits the second, which runs the REAL
+//      compaction.
+// Robust in both states: if some session instead compacts for real on the first
+// submission, the second finds nothing new and resolves to the same instant no-op —
+// harmless. Targeted at the resolved session by name only — never a tmux-wide sweep.
+const COMPACT_KEY_SETTLE_MS = 150; // typed "/compact" registers before the Enter
+const COMPACT_NOOP_CLEAR_MS = 700; // 1st (spurious) /compact resolves before the 2nd
+
+export interface CompactSendStep {
+  /** argv passed to `tmux` (the leading "tmux" is implicit). */
+  args: string[];
+  /** pause to observe AFTER this step, before the next. */
+  delayAfterMs: number;
+}
+
+/** Pure: the ordered tmux send-keys steps — two full /compact submissions so the
+ *  REAL (second) compaction fires from a single button click. */
+export function buildCompactSend(session: string): CompactSendStep[] {
+  return [
+    // submission #1 — absorbs the upstream spurious instant no-op
+    { args: ["send-keys", "-t", session, "-l", "/compact"], delayAfterMs: COMPACT_KEY_SETTLE_MS },
+    { args: ["send-keys", "-t", session, "Enter"], delayAfterMs: COMPACT_NOOP_CLEAR_MS },
+    // submission #2 — runs the REAL compaction
+    { args: ["send-keys", "-t", session, "-l", "/compact"], delayAfterMs: COMPACT_KEY_SETTLE_MS },
+    { args: ["send-keys", "-t", session, "Enter"], delayAfterMs: 0 },
+  ];
+}
+
+export interface CompactSendDeps {
+  /** Run one `tmux` argv. Default: spawnSync("tmux", args) with $TMUX stripped. */
+  run?: (args: string[]) => void;
+  /** Sleep. Default: setTimeout-backed (never blocks the event loop). */
+  delay?: (ms: number) => Promise<void>;
+}
+
+/** Inject /compact into a KNOWN-LIVE tmux session. I/O injected for hermetic tests. */
+export async function sendCompactToSession(session: string, deps: CompactSendDeps = {}): Promise<void> {
+  const run = deps.run ?? ((args: string[]) => void spawnSync("tmux", args, { stdio: "ignore", env: envNoTmux() }));
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (const step of buildCompactSend(session)) {
+    run(step.args);
+    if (step.delayAfterMs > 0) await delay(step.delayAfterMs);
+  }
+}
+
+// Resolve a callsign to its live tmux session and fire /compact. Returns the
+// resolved session name on success, or null when the callsign has no live tmux
+// session (Windows/ConPTY agents, stale/dead rows) — the caller maps null → 409.
+// `registry` is injectable so tests stay tmux/DB-free; production uses the default.
+export async function compactAgent(
+  callsign: string,
+  deps: CompactSendDeps = {},
+  registry?: RegistryEntry[],
+): Promise<string | null> {
+  const session = registry ? resolveLiveTmuxSession(callsign, registry) : resolveLiveTmuxSession(callsign);
+  if (!session) return null;
+  await sendCompactToSession(session, deps);
+  return session;
 }
 
 // Mint a single-use, short-lived ticket bound to {callsign, tmuxSession}. The

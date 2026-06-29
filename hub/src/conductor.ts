@@ -22,8 +22,8 @@
 //     samples the registry each tick into a per-session ring; this module reads
 //     the ring and asks only "did context_ts CHANGE between our samples?".
 //   • A FLAG is NON-DESTRUCTIVE — it surfaces an idle CANDIDATE to the operator,
-//     kills nothing. There is NO kill path here. Auto-kill is DEFERRED behind an
-//     operator-gated hook (PreToolUse bracket) + a held/pinned concept (doc §4/§10).
+//     kills nothing. There is NO kill path here. Auto-kill is DEFERRED behind a
+//     Operator-gated hook (PreToolUse bracket) + a held/pinned concept (doc §4/§10).
 //   • (a) flat-Δ over W_idle is the core; (b) "no open task" is DEMOTED to
 //     corroboration (vacuous for this fleet — ~all working agents claim no
 //     radio_task); (c) "no open bracket" is a PLUGGABLE input, ABSENT until the
@@ -37,7 +37,7 @@
 import type { RegistryEntry } from "./types.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Envelope — the operator's sanctioned limits. One of the TWO places the envelope lives
+// Envelope — Operator's sanctioned limits. One of the TWO places the envelope lives
 // (§7): the policy numbers here, the permission-mode allowlist at the executor.
 // ─────────────────────────────────────────────────────────────────────────────
 export interface Envelope {
@@ -45,7 +45,7 @@ export interface Envelope {
   cap: number;
   /** AUTO-COMPACT trigger — ABSOLUTE token count, not a model-limit %. */
   autoCompactTokens: number;
-  /** MAX-RETRY — after this many failed attempts, escalate to the operator (never silently drop). */
+  /** MAX-RETRY — after this many failed attempts, escalate to Operator (never silently drop). */
   maxRetry: number;
 }
 
@@ -56,7 +56,7 @@ export const DEFAULT_ENVELOPE: Envelope = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Conductor tuning — separate from the operator's envelope (these are mechanism, not policy).
+// Conductor tuning — separate from Operator's envelope (these are mechanism, not policy).
 // #11 idle-reap parameters (doc §8). W_idle is a NOISE knob, not a safety
 // mechanism — the safety guard is FLAG-ONLY + handle-gating (doc §3.1/§4).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ export interface FleetSnapshot {
    * and notes the absence. A session in this set is never flagged idle.
    */
   openBracketSessionIds?: string[];
-  /** Never flag/reap these (the conductor's own session, the operator's session). */
+  /** Never flag/reap these (the conductor's own session, Operator's session). */
   excludeSessionIds?: string[];
   /**
    * A3 kill-exempt PIN set — by CALLSIGN (operator-facing + stable; sid churns on
@@ -418,7 +418,7 @@ export function evaluateTaskRetries(tasks: TaskSnapshot[], env: Envelope = DEFAU
     } else {
       intents.push({
         kind: "escalate",
-        reason: `verify failed ${t.verifyFailures}× (≥ MAX_RETRY ${env.maxRetry}) — escalate to the operator, do not silently drop`,
+        reason: `verify failed ${t.verifyFailures}× (≥ MAX_RETRY ${env.maxRetry}) — escalate to Operator, do not silently drop`,
         taskId: t.taskId,
         classifierRisk: "none",
         requiresLock: null,

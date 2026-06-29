@@ -53,7 +53,27 @@ describe("resolveLiveTmuxSession (registry → session name)", () => {
     expect(resolveLiveTmuxSession("a", reg)).toBeNull();
   });
 
-  // NOTE: a positive (live) resolution requires a real tmux session; that path
-  // is covered by the offline WS smoke test (scripts/ws smoke), not here, so the
-  // unit suite stays tmux-free and hermetic.
+  it("a null-handle duplicate never shadows the live row — returns the live sibling's session", () => {
+    // The prod shape: become_referee's in-memory-only shed leaves a null-handle REFEREE ghost
+    // (no control_handle, no spawn_id) ALONGSIDE the live durable row. The resolver must skip the
+    // ghost (no derivable session) and keep checking until it finds the verified-live session.
+    const reg = [
+      row({ callsign: "REFEREE", control_handle: null, spawn_id: null }), // the ghost dup, listed first
+      row({ callsign: "REFEREE", control_handle: "tmux:wt-live-ref" }), // the live durable row
+    ];
+    // hasSession injected so the unit suite stays tmux-free: only wt-live-ref is live.
+    expect(resolveLiveTmuxSession("REFEREE", reg, (s) => s === "wt-live-ref")).toBe("wt-live-ref");
+  });
+
+  it("skips a dead-handle row and keeps checking to the live one (no bail on the first row)", () => {
+    const reg = [
+      row({ callsign: "REFEREE", control_handle: "tmux:wt-dead" }), // dead handle, checked first
+      row({ callsign: "REFEREE", control_handle: "tmux:wt-live-ref" }), // live, found by continuing
+    ];
+    expect(resolveLiveTmuxSession("REFEREE", reg, (s) => s === "wt-live-ref")).toBe("wt-live-ref");
+  });
+
+  // NOTE: production liveness uses the real `tmux has-session`; the WS smoke test
+  // (scripts/ws smoke) covers a real session end-to-end, so the unit suite stays
+  // tmux-free and hermetic by injecting the has-session probe.
 });

@@ -76,11 +76,11 @@ describe("authentication", () => {
     expect(res.status).toBe(200);
   });
 
-  it("should reject /register with reserved name 'operator'", async () => {
+  it("should reject /register with reserved name 'Operator'", async () => {
     const res = await fetch(`${ctx.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.joinToken}` },
-      body: JSON.stringify({ name: "operator" }),
+      body: JSON.stringify({ name: "Operator" }),
     });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };

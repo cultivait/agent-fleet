@@ -11,10 +11,10 @@
 //   chmod +x ~/.claude/hooks/wt-lease-guard.js
 //   Then register in Claude settings.json under PreToolUse:
 //     { "matcher": "Edit|Write|Bash", "hooks": [{ "type": "command",
-//       "command": "~/.claude/hooks/wt-lease-guard.js", "timeout": 3 }] }
+//       "command": "/home/user/.claude/hooks/wt-lease-guard.js", "timeout": 3 }] }
 //
 // Tagging format (JSON array in WT_GUARDED_SURFACES env var):
-//   [{"pattern": "/path/to/agent-fleet/hub/src/server.ts", "resource_key": "hub:server.ts"}, ...]
+//   [{"pattern": "/home/user/walkie-talkie/hub/src/server.ts", "resource_key": "hub:server.ts"}, ...]
 // Pattern is a literal path prefix (no glob) for simplicity.
 'use strict';
 

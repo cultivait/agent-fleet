@@ -7,7 +7,7 @@
 // this executor CARRIES THEM OUT. It is a non-agent Node process precisely so the
 // auto-mode classifier wall (which guards a Claude INSTANCE mutating shared/
 // persistent state) does not bind it — a daemon's reap/post is ring-1 fleet-ops
-// inside the operator's envelope (WS5 design §6/§6c).
+// inside Operator's envelope (WS5 design §6/§6c, confirmed by b37c 2026-06-17).
 //
 // SAFETY (load-bearing):
 //   • DRY-RUN is the DEFAULT. Nothing destructive runs until WT_CONDUCTOR_ARMED=1.
@@ -38,9 +38,9 @@ import { readControl } from "./conductor-control.mjs";
 
 const execFileP = promisify(execFile);
 
-const HUB_URL = process.env.AGENT_FLEET_HUB_URL || "http://localhost:9559";
+const HUB_URL = process.env.WALKIE_TALKIE_HUB_URL || "http://localhost:9559";
 const STATE_FILE =
-  process.env.AF_CONDUCTOR_STATE_FILE || join(homedir(), ".config", "agent-fleet", "conductor-state.json");
+  process.env.WT_CONDUCTOR_STATE_FILE || join(homedir(), ".config", "walkie-talkie", "conductor-state.json");
 const OWNER_SID = process.env.WT_CONDUCTOR_SID || "conductor-executor";
 const REAP_LEASE_MS = Number(process.env.WT_CONDUCTOR_REAP_LEASE_MS || 60_000);
 // Brain (compiled). Override via WT_CONDUCTOR_BRAIN; default = ../../hub/dist/conductor.js.
@@ -57,8 +57,8 @@ const BRAIN_URL =
 //   • STUCK-DETECTION (open-task + flat = hung) stays DEFERRED: no in-band signal
 //     separates busy-foreground from hung (a foreground tool freezes the gauge
 //     AND suspends the turn-based model, so a probe can't answer either). It is
-//     unblocked only by an out-of-band PreToolUse "entering tool" BRACKET (an
-//     operator-gated hook); until then it is UNKNOWN / no-action.
+//     unblocked only by an out-of-band PreToolUse "entering tool" BRACKET (a
+//     Operator-gated hook); until then it is UNKNOWN / no-action.
 //   • The reap MACHINERY below (lock-elected, belt-checked, targeted kill) is
 //     retained for the FUTURE armed reap trigger; it fires nothing today (the
 //     brain emits no "reap" intent — only "flag"). A truly DEAD process is the
@@ -138,7 +138,7 @@ export function classifyDispatch(intent) {
 }
 
 /** Escalation body — surfaced to the operator; never silently dropped. */
-export function escalateMessage(intent, operator = "@operator") {
+export function escalateMessage(intent, operator = "@Operator") {
   const tail = `${intent.callsign ? " (" + intent.callsign + ")" : ""}${intent.taskId ? " task=" + intent.taskId : ""}`;
   return { to: operator, channel: "#all", content: `[conductor ESCALATE] ${intent.reason}${tail}` };
 }
@@ -266,7 +266,7 @@ export async function executeIntent(intent, ctx) {
     return { action: "deferred-transport", kind: intent.kind, taskId: intent.taskId, reason: "task requeue transport not wired (future)" };
   }
   if (d.channel === "spawn") {
-    // The executor never INITIATES spawns — that's the launcher's operator-gated job
+    // The executor never INITIATES spawns — that's the launcher's Operator-gated job
     // (fleet up), and the brain emits no spawn intents (it only GATES via gateSpawn).
     // Handled explicitly so this is documented behavior, not a silent fall-through.
     return { action: "noop", kind: "spawn", reason: "spawn initiation is the launcher's job, not the executor's" };
@@ -460,7 +460,7 @@ function parseFlags(argv) {
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
   const env = await loadEnv();
-  const joinToken = env.AGENT_FLEET_JOIN_TOKEN || process.env.AGENT_FLEET_JOIN_TOKEN || null;
+  const joinToken = env.WALKIE_TALKIE_JOIN_TOKEN || process.env.WALKIE_TALKIE_JOIN_TOKEN || null;
   const armed = process.env.WT_CONDUCTOR_ARMED === "1" && !flags.dryRun;
 
   if (flags.mode === "print") {
@@ -487,7 +487,7 @@ async function main() {
   }
 
   if (!joinToken) {
-    console.error("✗ no AGENT_FLEET_JOIN_TOKEN (needed for locks + signed_off). Aborting.");
+    console.error("✗ no WALKIE_TALKIE_JOIN_TOKEN (needed for locks + signed_off). Aborting.");
     process.exitCode = 2;
     return;
   }

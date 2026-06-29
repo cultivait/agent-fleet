@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,15 +62,15 @@ export function initDB(): void {
   // === TEST SAFETY GUARD — regression-proof test isolation ===
   // Under a test runner the DB must NEVER resolve to a real, shared store — above all
   // the prod hub file. History: the rename added AGENT_FLEET_DB_PATH at HIGHER
-  // precedence than the legacy WALKIE_TALKIE_DB_PATH, and the process manager exports the
-  // prod path (e.g. /var/lib/agent-fleet/agent-fleet.db) into every builder shell. The test suite
+  // precedence than the legacy WALKIE_TALKIE_DB_PATH, and pm2 exports the prod path
+  // (/var/lib/storage/agent-fleet/agent-fleet.db) into every builder shell. The test suite
   // only ever neutralizes the LEGACY var (WALKIE_TALKIE_DB_PATH=":memory:"), so the
   // inherited AGENT_FLEET_DB_PATH won this `??` chain and every initDB() opened PROD —
   // re-seeding fixtures into the live store on each `vitest` run. The vitest setupFile
   // now drops the inherited var so :memory: actually takes effect; this guard makes the
   // failure mode IMPOSSIBLE to reintroduce: under VITEST / NODE_ENV=test, the only
   // allowed targets are ":memory:" or a file inside the OS temp dir (where db-migration
-  // tests legitimately write). Anything else — the prod DB file, a repo-local
+  // tests legitimately write). Anything else — the prod /var/lib file, a repo-local
   // agent-fleet.db — throws loudly instead of silently polluting a real database.
   const underTest = Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
   if (underTest && dbPath !== ":memory:") {
@@ -140,6 +141,45 @@ export function initDB(): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_messages_channel_timestamp
     ON messages (channel, timestamp)
+  `);
+
+  // Item 1 (fleet_dm): direct messages live in their OWN table — never the messages
+  // table behind a flag — so a DM is leak-proof by construction (no channel/history
+  // query can ever surface one). `pair` is the canonical sorted callsign pair
+  // ("alice|bob") so both directions land in one thread. Rows persist past a
+  // participant's disconnect/retire (operator audit record).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dm_messages (
+      id TEXT PRIMARY KEY,
+      "from" TEXT NOT NULL,
+      "to" TEXT NOT NULL,
+      pair TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      image TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_dm_messages_pair_timestamp
+    ON dm_messages (pair, timestamp)
+  `);
+
+  // Item 3 (+Referee dialog): the launch SPEC record. The dialog stores {channel,
+  // builder_count, loop_id} here and spawns a FIXED-argv referee; the spawned referee
+  // reads its assignment back from this table (latest pending) and consumes it. This is
+  // the "parameterize via DATA, not command" mechanism — params never enter the launch
+  // argv, so the spawn command stays uninterpolated.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS referee_launch_spec (
+      id TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      builder_count INTEGER NOT NULL,
+      loop_id TEXT,
+      created_at INTEGER NOT NULL,
+      consumed_at INTEGER,
+      consumed_by TEXT
+    )
   `);
 
   db.exec(`
@@ -355,6 +395,32 @@ export function dbGetUserChannels(userName: string): string[] {
   return rows.map((r) => r.channel);
 }
 
+// Rename a channel, re-keying its new name across EVERY table that stores the
+// channel name (channels PK + channel_members / messages / read_cursors /
+// channel_seq / pending_ack). Atomic (single transaction). Membership and the
+// full message history are PRESERVED — only the key changes. Returns false when
+// `from` does not exist or `to` already exists; the caller validates + maps those
+// to 4xx, but this guard keeps the DB consistent under any caller.
+export function dbRenameChannel(from: string, to: string): boolean {
+  if (from === to) return false;
+  if (!db.prepare("SELECT 1 FROM channels WHERE name = ?").get(from)) return false;
+  if (db.prepare("SELECT 1 FROM channels WHERE name = ?").get(to)) return false;
+  const apply = db.transaction(() => {
+    db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
+    db.prepare("UPDATE channel_members SET channel = ? WHERE channel = ?").run(to, from);
+    db.prepare('UPDATE messages SET channel = ? WHERE channel = ?').run(to, from);
+    db.prepare("UPDATE read_cursors SET channel = ? WHERE channel = ?").run(to, from);
+    // channel_seq.channel is the PK and is NOT cleared on channel delete, so a
+    // stale orphan row for `to` could collide on re-key — drop it first, then
+    // carry `from`'s monotonic counter over to the new name.
+    db.prepare("DELETE FROM channel_seq WHERE channel = ?").run(to);
+    db.prepare("UPDATE channel_seq SET channel = ? WHERE channel = ?").run(to, from);
+    db.prepare("UPDATE pending_ack SET channel = ? WHERE channel = ?").run(to, from);
+  });
+  apply();
+  return true;
+}
+
 export function dbSaveMessage(msg: Message): void {
   db.prepare(
     `INSERT INTO messages (id, "from", "to", content, channel, timestamp, image, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -410,6 +476,116 @@ export function dbGetChannelMessages(channel: string, limit = 50, sinceMs?: numb
           )
           .all(channel, sinceMs, limit) as Record<string, unknown>[]);
   return rows.map(parseMessageRow);
+}
+
+// Item 1 (fleet_dm): canonical thread key — both directions of a DM share one pair.
+export function dmPair(a: string, b: string): string {
+  return [a, b].sort().join("|");
+}
+
+// Persist a direct message to the dedicated dm_messages table (operator audit record).
+export function dbInsertDm(msg: Message): void {
+  db.prepare(
+    `INSERT INTO dm_messages (id, "from", "to", pair, content, timestamp, image) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    msg.id,
+    msg.from,
+    msg.to,
+    dmPair(msg.from, msg.to),
+    msg.content,
+    msg.timestamp,
+    msg.image ? JSON.stringify(msg.image) : null,
+  );
+}
+
+export interface DmThread {
+  pair: string;
+  a: string;
+  b: string;
+  count: number;
+  last_ts: number;
+  last_from: string;
+  last_content: string;
+}
+
+// One row per DM thread (canonical pair), newest-active first — for the cockpit pane.
+export function dbListDmThreads(): DmThread[] {
+  const rows = db
+    .prepare(`SELECT pair, COUNT(*) AS count, MAX(timestamp) AS last_ts FROM dm_messages GROUP BY pair ORDER BY last_ts DESC`)
+    .all() as { pair: string; count: number; last_ts: number }[];
+  return rows.map((r) => {
+    const [a, b] = r.pair.split("|");
+    const last = db
+      .prepare(`SELECT "from", content FROM dm_messages WHERE pair = ? ORDER BY timestamp DESC LIMIT 1`)
+      .get(r.pair) as { from: string; content: string };
+    return { pair: r.pair, a, b, count: r.count, last_ts: r.last_ts, last_from: last.from, last_content: last.content };
+  });
+}
+
+// Full transcript for one DM thread (oldest→newest), as Message rows with the pair as
+// the display "channel". Same most-recent-`limit` then re-sort-ASC shape as channels.
+export function dbGetDmHistory(pair: string, limit = 200): Message[] {
+  const rows = db
+    .prepare(
+      `SELECT id, "from", "to", content, timestamp, image FROM (
+         SELECT id, "from", "to", content, timestamp, image FROM dm_messages WHERE pair = ? ORDER BY timestamp DESC LIMIT ?
+       ) ORDER BY timestamp ASC`,
+    )
+    .all(pair, limit) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    id: row.id as string,
+    from: row.from as string,
+    to: row.to as string,
+    content: row.content as string,
+    channel: pair,
+    timestamp: row.timestamp as number,
+    image: row.image ? (JSON.parse(row.image as string) as MessageImage) : undefined,
+    dm: true,
+  }));
+}
+
+// ── Item 3 (+Referee dialog): launch-spec store ─────────────────────────────────
+export interface RefereeLaunchSpec {
+  id: string;
+  channel: string;
+  builder_count: number;
+  loop_id: string | null;
+  created_at: number;
+  consumed_at: number | null;
+  consumed_by: string | null;
+}
+
+export function dbCreateRefereeSpec(channel: string, builderCount: number, loopId: string | null): RefereeLaunchSpec {
+  const id = `rspec_${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+  db.prepare(
+    `INSERT INTO referee_launch_spec (id, channel, builder_count, loop_id, created_at, consumed_at, consumed_by)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+  ).run(id, channel, builderCount, loopId, Date.now());
+  return dbGetRefereeSpec(id) as RefereeLaunchSpec;
+}
+
+export function dbGetRefereeSpec(id: string): RefereeLaunchSpec | undefined {
+  return db.prepare("SELECT * FROM referee_launch_spec WHERE id = ?").get(id) as RefereeLaunchSpec | undefined;
+}
+
+// The most recent UNCONSUMED spec — what a freshly-spawned referee reads as its assignment.
+export function dbGetPendingRefereeSpec(): RefereeLaunchSpec | undefined {
+  return db
+    .prepare("SELECT * FROM referee_launch_spec WHERE consumed_at IS NULL ORDER BY created_at DESC LIMIT 1")
+    .get() as RefereeLaunchSpec | undefined;
+}
+
+// Atomically claim the latest pending spec for the reader (one-shot). Returns the claimed
+// spec, or undefined if none pending.
+export function dbConsumeRefereeSpec(by: string): RefereeLaunchSpec | undefined {
+  const pending = dbGetPendingRefereeSpec();
+  if (!pending) return undefined;
+  db.prepare("UPDATE referee_launch_spec SET consumed_at = ?, consumed_by = ? WHERE id = ?").run(
+    Date.now(),
+    by,
+    pending.id,
+  );
+  return dbGetRefereeSpec(pending.id);
 }
 
 export function dbGetRecentMessages(limit = 200, sinceMs?: number): Message[] {
@@ -488,7 +664,7 @@ export function dbDeleteReadCursorsForChannel(channel: string): void {
 // Operator presence: messages directly addressed to `name` (the "to" column) that
 // the operator has NOT read yet (newer than its per-channel read cursor), oldest
 // first. Used by ensureOperatorPresence to REHYDRATE the operator's in-memory queue
-// after a hub restart so nothing addressed to the operator is lost across a restart — the
+// after a hub restart so nothing addressed to Operator is lost across a restart — the
 // in-memory queue is volatile but the messages row + read cursor are durable.
 // Note: only direct sends (to == name) are recoverable from the DB; @-mentions
 // inside an @all broadcast are not a persisted column, so they are not rehydrated.

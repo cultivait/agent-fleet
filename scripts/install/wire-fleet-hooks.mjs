@@ -75,6 +75,11 @@ const WIRING = {
     { matcher: "Edit|Write|Bash", hooks: [entry("wt-lease-guard.js", 3)] },
     { matcher: "Agent|Task", hooks: [entry("fleet-taskboard.js", 10)] },
     { hooks: [entry("fleet-plan-heartbeat.js", 10)] },
+    // Same gauge as PostToolUse:72 — bracket every tool call on both sides so the
+    // board's context-token figure is never >1 tool-call stale during active work.
+    // (No periodic/timer writer: an idle/standby agent's context isn't growing, so a
+    // steady gauge there is correct, not stale.)
+    { hooks: [entry("wt-context-gauge.cjs", 5)] },
   ],
 };
 

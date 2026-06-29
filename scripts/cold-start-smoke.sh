@@ -69,9 +69,8 @@ for SEL in "${NPM_MATRIX[@]}"; do
       | node -e "JSON.parse(require(\"fs\").readFileSync(0)).id||process.exit(1)"
     curl -sf "$AGENT_FLEET_HUB_URL/users" | grep -q newcomer
   ' && PASS "[npm $NPMV] first-timer joined + messaged + sees roster" || FAIL "[npm $NPMV] round-trip failed"
-  docker exec "$C" bash -lc 'curl -sf localhost:'"$HUBPORT"'/users | grep -qi "\"operator\"" && exit 0 || exit 1' \
-    && PASS "[npm $NPMV] operator presence registered under the generic default name" \
-    || FAIL "[npm $NPMV] default operator presence missing from roster"
+  docker exec "$C" bash -lc 'curl -sf localhost:'"$HUBPORT"'/users | grep -qi "\"operator\"" && exit 1 || exit 0' \
+    && PASS "[npm $NPMV] no personal name leaked" || FAIL "[npm $NPMV] personal name leaked"
 done
 
-echo "== COLD-START GREEN: clone → one command → working fleet, pinned toolchain, generic operator default, across npm 10 + 11.5+ =="
+echo "== COLD-START GREEN: clone → one command → working fleet, pinned toolchain, no personal name, across npm 10 + 11.5+ =="

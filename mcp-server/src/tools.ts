@@ -202,6 +202,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
 
   // Alias-transition: register the canonical fleet_* tool plus a hidden deprecated
   // radio_* alias delegating to the SAME handler, for one transition version.
+  // See ~/.claude/docs/agent-fleet-rename-plan.md (Lane A).
   // schema/handler are typed `any`: server.tool is heavily overloaded and a
   // precise Parameters<> type resolves to the wrong (annotations) overload, so a
   // localized any keeps the 4-arg (name, description, schema, handler) form sound.
@@ -214,10 +215,11 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     handler: (args: any) => any,
   ) => {
     server.tool(fleetName, description, schema, handler);
-    // radio_* aliases are gated behind AF_RADIO_ALIASES (default ON for
-    // back-compat with the legacy radio_* tool names, so behavior is unchanged).
-    // Set AF_RADIO_ALIASES=0 to drop them — removes the duplicate tool-name
-    // injection + the double ToolSearch result payload.
+    // radio_* aliases are gated behind AF_RADIO_ALIASES (default ON during the
+    // walkie-talkie→agent-fleet rename transition, so behavior is unchanged).
+    // Set AF_RADIO_ALIASES=0 once the rename cutover completes to drop them —
+    // removes the duplicate tool-name injection + the double ToolSearch result
+    // payload. Staged lever; see ~/.claude/docs/fleet-token-efficiency-tasks.md #5.
     if (process.env.AF_RADIO_ALIASES !== "0") {
       const radioName = `radio_${fleetName.slice("fleet_".length)}`;
       server.tool(radioName, `(deprecated alias of ${fleetName}) ${description}`, schema, handler);
@@ -360,14 +362,14 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
   // canonical names auto-derive their deprecated radio_* counterparts via
   // registerTool. Schema + handler are defined once and shared by both names.
   const radioSendDescription =
-    "Send a message to a channel. Only members you @-mention are notified (nudged/woken); everyone else can read it later but is not interrupted. @-mention EVERY member the message affects by exact callsign in the body (e.g. '@web @api ...') — naming only one leaves the rest uninformed. @all broadcasts to the channel for transcript/progress notes and notifies NO ONE, so never use it alone for anything urgent or needing a reply. Messages are scoped to a channel.";
+    "Send a message to a channel. Only members you @-mention are notified (nudged/woken); everyone else can read it later but is not interrupted. @-mention EVERY member the message affects by exact callsign in the body (e.g. '@alice @bob ...') — naming only one leaves the rest uninformed. @all broadcasts to the channel for transcript/progress notes and notifies NO ONE, so never use it alone for anything urgent or needing a reply. Messages are scoped to a channel.";
   const radioSendSchema = {
     to: z
       .string()
       .describe(
         "Primary recipient: @name notifies that member; @all broadcasts to the channel and notifies no one. To notify several members, also @-mention each of them in the message body.",
       ),
-    message: z.string().describe("Message content. @-mention (e.g. '@web') every member this message affects so they are notified."),
+    message: z.string().describe("Message content. @-mention (e.g. '@alice') every member this message affects so they are notified."),
     channel: z
       .string()
       .optional()
@@ -430,6 +432,55 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     radioSendSchema,
     radioSendHandler,
   );
+
+  // Item 1 (fleet_dm): point-to-point direct message — never enters a channel, so no
+  // third agent can read it on any wake. A DISTINCT tool (not a flag on fleet_send) and
+  // with NO channel param, so a mis-set field can't fan a private note to a channel.
+  const fleetDmDescription =
+    "Send a PRIVATE direct message to a single member, point-to-point. Unlike fleet_send it has NO channel and never enters one: only the named recipient receives it (no third agent can read it on any wake). It IS visible to the operator's cockpit for oversight. Use for a 1:1 aside; use fleet_send for anything the channel should see.";
+  const fleetDmSchema = {
+    to: z.string().describe("Recipient callsign (with or without a leading @). The ONLY member who receives this DM."),
+    message: z.string().describe("Direct message content."),
+    image_data: z
+      .string()
+      .optional()
+      .describe("Base64-encoded image data. Must be provided together with image_mime_type."),
+    image_mime_type: z
+      .string()
+      .optional()
+      .describe("MIME type of the image (e.g. 'image/png'). Must be provided together with image_data."),
+  };
+  const fleetDmHandler = async ({
+    to,
+    message,
+    image_data,
+    image_mime_type,
+  }: {
+    to: string;
+    message: string;
+    image_data?: string;
+    image_mime_type?: string;
+  }) => {
+    if (!currentToken) {
+      return {
+        content: [{ type: "text" as const, text: "Not on the air. Use fleet_join first." }],
+        isError: true,
+      };
+    }
+    try {
+      const image = image_data && image_mime_type ? { data: image_data, mimeType: image_mime_type } : undefined;
+      const result = await client.dm(currentToken, to, message, image);
+      return {
+        content: [{ type: "text" as const, text: `DM sent to ${result.to} (id: ${result.id})` }],
+      };
+    } catch (e) {
+      return {
+        content: [{ type: "text" as const, text: `DM failed: ${(e as Error).message}` }],
+        isError: true,
+      };
+    }
+  };
+  registerTool("fleet_dm", fleetDmDescription, fleetDmSchema, fleetDmHandler);
 
   registerTool(
     "fleet_send_image",
@@ -524,16 +575,27 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
           }
           const imageTag = m.image ? " [image attached]" : "";
           const principalTag = m.principal ? " [principal]" : "";
-          const line = `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from}${principalTag} → ${m.to}: ${m.content}${imageTag}`;
+          // A DM has no channel — render it as a private aside, not a channel line.
+          const line = m.dm
+            ? `[DM] ${m.from}${principalTag} → you: ${m.content}${imageTag}`
+            : `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.channel || "#all"} ${m.from}${principalTag} → ${m.to}: ${m.content}${imageTag}`;
           contentBlocks.push({ type: "text" as const, text: line });
         }
+        // DMs are excluded from the channel-reply hint (they have no channel to reply in).
         const channels = [
-          ...new Set(result.messages.filter((m) => m.channel && m.channel !== "#all").map((m) => m.channel)),
+          ...new Set(result.messages.filter((m) => !m.dm && m.channel && m.channel !== "#all").map((m) => m.channel)),
         ];
         if (channels.length > 0) {
           contentBlocks.push({
             type: "text" as const,
             text: `\nIMPORTANT: Reply in the same channel you received the message on. Use the channel parameter: ${channels.map((c) => `"${c}"`).join(", ")}`,
+          });
+        }
+        const dmSenders = [...new Set(result.messages.filter((m) => m.dm).map((m) => m.from))];
+        if (dmSenders.length > 0) {
+          contentBlocks.push({
+            type: "text" as const,
+            text: `\nDirect message(s) from ${dmSenders.map((s) => `@${s}`).join(", ")} — reply privately with fleet_dm (these are NOT in any channel).`,
           });
         }
         return { content: contentBlocks };
@@ -1328,7 +1390,7 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
     "fleet_lock_acquire",
     "Meta-harness: acquire a named resource lock so this session is the sole permitted writer. Fails (409) if another session holds a live lease. Fail-open: if the hub is unreachable, the agent should proceed without the lock.",
     {
-      resource_key: z.string().describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:orders' (required)."),
+      resource_key: z.string().describe("Unique key for the contested surface, e.g. 'hub:server.ts' or 'db:appdb' (required)."),
       lease_ms: z
         .number()
         .optional()
@@ -1665,6 +1727,96 @@ export function createMcpServer(hubUrl: string, joinTok: string): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Loop admin-stop failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // Item 2 (loop-goal): operator authors a DRAFT goal loop from a one-sentence objective.
+  registerTool(
+    "fleet_loop_admin_create_draft",
+    "Loop governor (operator): author a DRAFT goal-driven loop from a one-sentence objective. Requires AGENT_FLEET_ADMIN_TOKEN. The loop starts in 'draft' (nothing running) until a Referee binds it and its acceptance criteria are approved.",
+    {
+      goal: z.string().describe("The operator's one-sentence objective for the loop."),
+      label: z.string().optional().describe("Optional short label (defaults to the goal)."),
+      auto_approve: z
+        .boolean()
+        .optional()
+        .describe("Skip the criteria-approval gate for this loop (trusted repeat runs)."),
+    },
+    async ({ goal, label, auto_approve }) => {
+      const adminToken = process.env.AGENT_FLEET_ADMIN_TOKEN ?? process.env.WALKIE_TALKIE_ADMIN_TOKEN;
+      if (!adminToken) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Cannot create draft loop: AGENT_FLEET_ADMIN_TOKEN is not set in this session's environment.",
+            },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const result = await client.loopAdminCreateDraft(adminToken, { goal, label, auto_approve });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Loop create-draft failed: ${(e as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Item 2 (loop-goal): a Referee binds a draft loop + proposes its acceptance criteria.
+  registerTool(
+    "fleet_loop_bind",
+    "Loop governor (Referee): bind yourself to a DRAFT goal loop and propose its acceptance criteria. Ownership transfers to you and the loop moves to 'awaiting_approval' (or straight to 'running' if the loop's auto_approve is set). Then delegate the work via fleet_plan_create/fleet_task_create and judge each wave with fleet_loop_verdict.",
+    {
+      id: z.string().describe("Draft loop id to bind."),
+      criteria: z
+        .object({
+          rubric: z
+            .string()
+            .describe("Qualitative rubric: how you (Referee-as-judge) will score each wave against the goal."),
+          completeness_target: z
+            .number()
+            .optional()
+            .describe("Accept guardrail: completeness (0..1) at which the loop is done."),
+          plateau: z
+            .object({ window: z.number(), epsilon: z.number() })
+            .optional()
+            .describe("Stop with 'plateau' when the last `window` scores span <= epsilon."),
+        })
+        .describe("The acceptance bundle proposed for operator approval (rubric + numeric guardrails)."),
+      project_id: z.string().optional().describe("Optional: the Plan this loop will delegate to (append-wave)."),
+    },
+    async ({ id, criteria, project_id }) => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.loopBind(currentToken, { id, criteria, project_id });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Loop bind failed: ${(e as Error).message}` }], isError: true };
+      }
+    },
+  );
+
+  // Item 3 (+Referee dialog): the spawned referee reads its launch assignment.
+  registerTool(
+    "fleet_referee_spec",
+    "Loop governor (Referee): read (and consume, one-shot) your launch assignment from the +Referee dialog — {channel, builder_count, loop_id}. Returns spec:null if you were not launched via the dialog. On a non-null spec: join the channel, then fleet_loop_bind the loop_id and propose its acceptance criteria.",
+    {},
+    async () => {
+      if (!currentToken) return notOnAir;
+      try {
+        const result = await client.refereeSpec(currentToken);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Referee-spec fetch failed: ${(e as Error).message}` }],
+          isError: true,
+        };
       }
     },
   );

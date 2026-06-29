@@ -7,15 +7,7 @@ import { STALL_BEAT_MS } from "./constants.js";
 // the raw admin token must never reach the browser. The hub accepts this scoped
 // token on the admin routes the cockpit calls. The parameter is still a plain
 // string threaded verbatim, so the existing injection tests are unaffected.
-//
-// `operatorName` is the configured persistent operator identity. It is injected
-// into the client script (window.__AF_OPERATOR__) so the dashboard can tag the
-// operator's messages without hardcoding a name. Defaults to the same env-driven
-// value server.ts resolves (AF_OPERATOR_NAME ?? WT_OPERATOR_NAME ?? "Operator").
-export function getDashboardHTML(
-  cockpitToken: string,
-  operatorName: string = (process.env.AF_OPERATOR_NAME ?? process.env.WT_OPERATOR_NAME ?? "Operator").trim() || "Operator",
-): string {
+export function getDashboardHTML(cockpitToken: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -25,7 +17,7 @@ export function getDashboardHTML(
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ===== Quiet-modern theme =====
+  /* ===== Cultivait brand-forward / quiet-modern theme =====
      Paper & ink. Moss is the resting "all-good" accent; burnt orange (--action)
      is the ONLY loud note, spent solely where a human is genuinely needed.
      Whitespace is the texture — hairline rules + paper/white tonal steps, no
@@ -71,6 +63,10 @@ export function getDashboardHTML(
     display: flex;
     flex-direction: column;
     -webkit-font-smoothing: antialiased;
+    /* B3-REDO v2: the B4 body/html freeze (overflow:hidden + overscroll-behavior:none) was REMOVED.
+       That freeze is what killed the finger-swipe page-pan which WAS Operator's pre-wave scroll (it forwards
+       as wheel events to Claude's own pager). Trade-off Operator accepted: the mobile header no longer pins.
+       Terminal history now comes deterministically from the touch->wheel forwarder (cockpit-ui.ts). */
   }
 
   /* Header */
@@ -261,6 +257,14 @@ export function getDashboardHTML(
     border-color: var(--accent-border);
     background: var(--accent-soft);
   }
+  /* H1/H2: the +Agent / +Referee controls moved OUT of the On Air header into the
+     Operator toolbar at the sidebar foot, grouped with Kick-all (see .op-toolbar). */
+  /* U1: section dividers + breathing room between Channels / On Air / Agents. */
+  .sidebar-label.section-divider {
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    padding-top: 14px;
+  }
 
   /* Channel list */
   #channel-list {
@@ -395,43 +399,129 @@ export function getDashboardHTML(
     color: var(--red);
     background: var(--red-soft);
   }
-  #stop-all {
-    width: 100%;
-    padding: 8px;
-    background: var(--red-soft);
-    color: var(--red);
-    border: 1px solid var(--red-border);
-    border-radius: 8px;
-    font-family: var(--font);
-    font-size: 12px;
-    font-weight: 600;
+  .compact-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s ease;
+    opacity: 0;
+    flex-shrink: 0;
+    margin-left: 4px;
   }
-  #stop-all:hover {
-    background: rgba(162,59,35,0.16);
-    border-color: rgba(162,59,35,0.34);
+  #user-list li:hover .compact-btn {
+    opacity: 1;
   }
-  #stop-all:active {
-    transform: scale(0.98);
-  }
-  #launch-referee {
-    width: 100%;
-    margin-top: 6px;
-    padding: 8px;
-    background: var(--green-soft);
+  .compact-btn:hover {
+    border-color: var(--accent-border);
     color: var(--accent-text);
-    border: 1px solid var(--green-border);
-    border-radius: 8px;
-    font-family: var(--font);
-    font-size: 12px;
-    font-weight: 600;
+    background: var(--accent-soft);
+  }
+  .channel-rename {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s ease;
+    opacity: 0;
+    flex-shrink: 0;
+    margin-left: 4px;
   }
-  #launch-referee:hover { border-color: var(--accent-text); }
-  #launch-referee:active { transform: scale(0.98); }
-  #launch-referee:disabled { opacity: 0.55; cursor: default; }
+  #channel-list li:hover .channel-rename {
+    opacity: 1;
+  }
+  .channel-rename:hover {
+    border-color: var(--accent-border);
+    color: var(--accent-text);
+    background: var(--accent-soft);
+  }
+  /* Item 1 (fleet_dm): operator-only Direct Messages pane — kept SEPARATE from the
+     channel list so DMs never interleave with channel chat. Read-only audit view. */
+  #dm-list { list-style: none; margin: 0; padding: 0; }
+  #dm-list li {
+    display: flex; align-items: center; gap: 6px; justify-content: space-between;
+    padding: 4px 8px; cursor: pointer; border-radius: 4px; font-size: 0.85em;
+  }
+  #dm-list li:hover { background: var(--accent-soft); }
+  #dm-list .dm-pair { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dm-list .dm-count {
+    font-size: 0.75em; opacity: 0.7; background: var(--accent-soft);
+    border-radius: 8px; padding: 0 6px; flex: 0 0 auto;
+  }
+  .dm-modal {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center;
+    justify-content: center; background: rgba(0,0,0,0.45);
+  }
+  .dm-modal[hidden] { display: none; }
+  .dm-modal-card {
+    width: min(620px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+    background: var(--bg, #fff); color: var(--text, #111);
+    border: 1px solid var(--accent-border, #ccc); border-radius: 8px; overflow: hidden;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.35);
+  }
+  .dm-modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--accent-border, #ddd); font-weight: 600;
+  }
+  .dm-modal-close {
+    border: none; background: none; font-size: 1.3em; line-height: 1; cursor: pointer;
+    color: inherit; opacity: 0.7;
+  }
+  .dm-modal-close:hover { opacity: 1; }
+  .dm-modal-body { padding: 10px 14px; overflow-y: auto; }
+  .dm-modal-body .dm-line { padding: 6px 0; border-bottom: 1px solid var(--accent-soft, #eee); }
+  .dm-modal-body .dm-from { font-weight: 600; }
+  .dm-modal-body .dm-arrow { opacity: 0.5; margin: 0 4px; }
+  .dm-modal-body .dm-time { float: right; font-size: 0.78em; opacity: 0.6; }
+  .dm-modal-body .dm-content { margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+  .dm-modal-body .dm-loading { opacity: 0.6; padding: 12px 0; }
+  /* ===== H1/H2 · Operator control toolbar (B+A hybrid; Operator-picked, Gemini+Codex-ranked) =====
+     Additive pair (＋Agent / ＋Referee) = moss ghost; destructive Kick-all = brick ghost,
+     guarded by a 2-step inline confirm (explicit copy + live count + countdown + Esc/outside-
+     tap to cancel — see the JS). Kick-all is a RECOVERABLE disconnect (agents rejoin), so it
+     stays brick — burnt-orange #C9501A remains reserved for truly irreversible action.
+     flex-wrap is load-bearing: the sidebar is a 280px drawer inside the B4 overflow:hidden
+     shell, so a too-wide row CLIPS (no scrollbar) — wrapping is what prevents lost buttons. */
+  .op-toolbar { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin-top: 10px; }
+  .op-btn {
+    flex: 1 1 auto; min-width: 0;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    min-height: 44px; padding: 0 10px;            /* 44px = a11y touch target (ghost recedes; enforce size) */
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-secondary); cursor: pointer; transition: all 0.15s ease;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .op-btn .op-ico { font-size: 13px; line-height: 1; flex: none; }   /* icon = color-independent signal (WCAG) */
+  .op-btn:active { transform: scale(0.98); }
+  .op-btn:disabled { opacity: 0.55; cursor: default; }
+  .op-add { color: var(--accent-text); background: var(--green-soft); border-color: var(--green-border); }
+  .op-add:hover { border-color: var(--accent-text); }
+  .op-kick { color: var(--red); background: var(--red-soft); border-color: var(--red-border); }
+  .op-kick:hover { background: rgba(162,59,35,0.14); border-color: rgba(162,59,35,0.40); }
+  /* armed = the confirm; spans the full row and WRAPS (the resting nowrap/ellipsis would clip the copy). */
+  .op-kick.armed { flex-basis: 100%; color: #fff; background: var(--red); border-color: var(--red); font-weight: 600;
+                   white-space: normal; height: auto; min-height: 44px; padding: 8px 10px; line-height: 1.35; }
+  /* create▏destroy hairline divider between the additive pair and Kick (desktop); hidden when Kick is
+     armed (it spans the row) and ≤820px (Kick icon-collapses, separation is implicit). */
+  .op-div { flex: none; width: 1px; align-self: stretch; margin: 4px 0; background: var(--border); }
+  .op-toolbar:has(.op-kick.armed) .op-div { display: none; }
+  @media (max-width: 820px) {
+    /* 280px drawer CLIPS (no scrollbar): Kick takes its OWN full row here so neither the label nor the
+       armed confirm copy can overflow horizontally — and the danger LABEL stays visible (icon-only on a
+       destructive action loses discoverability, per the design review). flex-wrap + min-width:0 above are
+       belt-and-suspenders. Verify rendered at 320px. */
+    .op-div { display: none; }
+    .op-kick { flex-basis: 100%; }
+  }
 
   /* Agent list */
   #agent-list {
@@ -634,10 +724,9 @@ export function getDashboardHTML(
   .msg {
     padding: 10px 14px;
     border-radius: var(--radius);
-    font-size: 16px;
+    font-size: 13px;             /* Operator: channel text = terminal font (13px desktop / 11px ≤820px below) */
     line-height: 1.6;
     max-width: 100%;
-    animation: slideIn 0.25s cubic-bezier(0.16,1,0.3,1);
     border: 1px solid transparent;
   }
   .msg .time {
@@ -700,7 +789,7 @@ export function getDashboardHTML(
   .msg.referee .from { color: #9A4A28; }
   .msg.system {
     background: transparent;
-    font-size: 15px;
+    font-size: 13px;             /* match .msg (terminal-size); 11px ≤820px below */
     color: var(--text-tertiary);
     max-width: 100%;
     padding: 6px 14px;
@@ -818,7 +907,6 @@ export function getDashboardHTML(
   }
   .mention-popup.visible {
     display: block;
-    animation: slideIn 0.15s cubic-bezier(0.16,1,0.3,1);
   }
   .mention-item {
     padding: 8px 12px;
@@ -891,7 +979,7 @@ export function getDashboardHTML(
     font-size: 11px;
     color: var(--accent-text);
     margin-left: 6px;
-    animation: typingBlink 1.2s ease-in-out infinite;
+    animation: chatTypingBlink 1.2s ease-in-out infinite;
   }
   #typing-bar {
     font-family: var(--mono);
@@ -950,11 +1038,6 @@ export function getDashboardHTML(
   .msg-image img:hover {
     border-color: var(--border);
   }
-  @keyframes typingBlink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
   /* Task board */
   #task-board {
     width: 280px;
@@ -992,7 +1075,6 @@ export function getDashboardHTML(
     flex-direction: column;
     gap: 6px;
     transition: border-color 0.15s ease;
-    animation: slideIn 0.25s cubic-bezier(0.16,1,0.3,1);
   }
   .board-card:hover {
     border-color: var(--border);
@@ -1054,7 +1136,6 @@ export function getDashboardHTML(
     border: 1px solid var(--accent-border);
     flex-shrink: 0;
     white-space: nowrap;
-    animation: typingBlink 1.6s ease-in-out infinite;
   }
   .board-context {
     font-family: var(--mono);
@@ -1217,7 +1298,6 @@ export function getDashboardHTML(
   }
   .board-todos li.in-progress .todo-marker {
     color: var(--accent-text);
-    animation: typingBlink 1.2s ease-in-out infinite;
   }
   .board-completed {
     font-family: var(--mono);
@@ -1306,13 +1386,18 @@ export function getDashboardHTML(
     color: var(--text-tertiary);
   }
 
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  @keyframes signalSettle { from { background: var(--action-soft); } to { background: transparent; } }
+  .ck-signal { animation: signalSettle 600ms ease-out 1; }
+  @keyframes chatTypingBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
   /* ---------- Mobile / responsive ---------- */
   @media (max-width: 820px) {
+    /* B3-REDO v2: the mobile html-lock was REMOVED (it froze the document so the page couldn't pan).
+       Reinstating page-pan is what restores Operator's swipe-scroll; the header un-pinning is the accepted
+       trade. (Was: html{height:100%;overflow:hidden;overscroll-behavior:none} added by B4 @a27abec.) */
+
+    #ck-view-ops .ck-rowzero { position: sticky; top: 0; z-index: 5; background: var(--bg-raised); }
+
     .mobile-toggle { display: inline-flex; }
 
     header { padding: 0 12px; gap: 10px; }
@@ -1350,6 +1435,8 @@ export function getDashboardHTML(
     .message-area { width: 100%; flex: 1; }
 
     #messages { padding: 14px 14px; }
+    /* Operator: channel text tracks the TERMINAL font at the same 820px breakpoint (terminal = 11px ≤820). */
+    .msg, .msg.system { font-size: 11px; }
     #typing-bar { padding: 0 14px; }
     #typing-bar.active { padding: 6px 14px; }
 
@@ -1370,8 +1457,7 @@ export function getDashboardHTML(
       padding: 7px;
     }
     .filter-btn, .clear-btn { padding: 4px 9px; }
-    .msg { font-size: 15px; padding: 9px 12px; }
-    .msg.system { font-size: 14px; }
+    .msg { padding: 9px 12px; }   /* font-size handled by the ≤820px rule (11px, terminal-matched) */
     #messages { padding: 12px 10px; }
 
     /* Composer relayout: on phones the channel (#all) + recipient (@all) chips
@@ -1431,16 +1517,28 @@ export function getDashboardHTML(
     </button>
   </header>
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
+  <div class="dm-modal" id="dm-modal" hidden>
+    <div class="dm-modal-card">
+      <div class="dm-modal-head"><span id="dm-modal-title"></span><button class="dm-modal-close" id="dm-modal-close" aria-label="Close">×</button></div>
+      <div class="dm-modal-body" id="dm-modal-body"></div>
+    </div>
+  </div>
   <div class="container">
     <div id="sidebar">
       <span class="sidebar-label">Channels <button class="add-btn" id="add-channel-btn">+ New</button></span>
       <ul id="channel-list"></ul>
-      <span class="sidebar-label">On Air</span>
+      <span class="sidebar-label section-divider">Direct Messages</span>
+      <ul id="dm-list"></ul>
+      <span class="sidebar-label section-divider">On Air</span>
       <ul id="user-list"></ul>
-      <span class="sidebar-label">Agents <button class="add-btn" id="add-agent-btn">+ New</button></span>
+      <span class="sidebar-label section-divider">Agents</span>
       <ul id="agent-list"></ul>
-      <button id="stop-all">Kick all agents</button>
-      <button id="launch-referee" title="Spawn a headless referee on this hub (tmux)">+ Launch Referee</button>
+      <div class="op-toolbar" role="group" aria-label="Operator controls">
+        <button type="button" class="op-btn op-add" id="add-agent-btn" title="Add an agent config"><span class="op-ico" aria-hidden="true">＋</span>Agent</button>
+        <button type="button" class="op-btn op-add" id="launch-referee" title="Spawn a headless referee on this hub (tmux)"><span class="op-ico" aria-hidden="true">＋</span>Referee</button>
+        <span class="op-div" aria-hidden="true"></span>
+        <button type="button" class="op-btn op-kick" id="stop-all" title="Disconnect all agents (2-step confirm)"><span class="op-ico" aria-hidden="true">⏏</span><span class="op-kick-label">Kick all</span></button>
+      </div>
     </div>
     <div class="message-area">
       <div id="messages">
@@ -1465,6 +1563,15 @@ export function getDashboardHTML(
       <div class="ck-term-overlay" id="ck-term-overlay" aria-hidden="true">
         <div class="ck-term-modal" role="region" aria-label="Agent terminal">
           <div class="ck-term-body" id="ck-term-body"></div>
+        </div>
+        <!-- M2: mobile-only helper keys (CSS-gated ≤819px) for sequences a phone keyboard can't send. -->
+        <div class="ck-term-keys" id="ck-term-keys" role="toolbar" aria-label="Terminal helper keys">
+          <button type="button" class="ck-term-key" data-seq="shifttab" title="Shift+Tab — cycle mode">⇧Tab</button>
+          <button type="button" class="ck-term-key" data-seq="tab" title="Tab — complete">Tab</button>
+          <button type="button" class="ck-term-key" data-seq="esc" title="Esc — interrupt">Esc</button>
+          <button type="button" class="ck-term-key" data-seq="deploy" title="Send 'deploy go' to this agent">Deploy</button>
+          <button type="button" class="ck-term-key" data-seq="compact" title="/compact this agent's context">Compact</button>
+          <button type="button" class="ck-term-key" data-seq="rejoin" title="Send 'Rejoin channel' to this agent">Rejoin</button>
         </div>
       </div>
     </div>
@@ -1501,12 +1608,9 @@ export function getDashboardHTML(
     // NOT the raw admin token. The hub accepts it on the admin routes the
     // dashboard/cockpit call. Named ADMIN_TOKEN only for call-site continuity.
     const ADMIN_TOKEN = "${cockpitToken}";
-    // The configured persistent operator identity, injected server-side. The
-    // dashboard tags messages from this name as the operator (instead of a
-    // hardcoded handle). Source: AF_OPERATOR_NAME ?? WT_OPERATOR_NAME ?? "Operator".
-    const OPERATOR_NAME = ${JSON.stringify(operatorName)};
-    window.__AF_OPERATOR__ = OPERATOR_NAME;
     const adminHeaders = { "Content-Type": "application/json", "Authorization": "Bearer " + ADMIN_TOKEN };
+    // System channels with no rename/delete controls (server also hard-guards these).
+    const RESERVED_CHANNELS = ["#all", "#Agent Radio", "#Reserved"];
     const messagesEl = document.getElementById("messages");
     const userListEl = document.getElementById("user-list");
     const channelListEl = document.getElementById("channel-list");
@@ -1542,6 +1646,19 @@ export function getDashboardHTML(
       });
     }
 
+    // Fire /compact into a live agent's tmux session (button-only; the hub never
+    // auto-compacts). Confirm first — compaction is disruptive to that agent.
+    function compactAgent(name) {
+      if (!confirm("Send /compact to " + name + "? This compacts that agent's context.")) return;
+      fetch("/admin-compact-agent", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ callsign: name }),
+      }).then(r => r.json()).then(data => {
+        if (data && data.error) alert(data.error);
+      }).catch(() => {});
+    }
+
     const typingBarEl = document.getElementById("typing-bar");
     function renderTypingBar() {
       const names = [...typingUsers.entries()].filter(([, v]) => v.channel === selectedChannel).map(([k]) => k);
@@ -1572,7 +1689,7 @@ export function getDashboardHTML(
         const dotCls = online ? "user-dot" : "user-dot offline";
         const tu = typingUsers.get(u);
         const typingHtml = tu && tu.channel === selectedChannel ? '<span class="typing-indicator">typing...</span>' : '';
-        info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + u + '</span>' + typingHtml;
+        info.innerHTML = '<span class="' + dotCls + '"></span><span class="user-name">' + escapeHtml(u) + '</span>' + typingHtml;
         // Live callsign → open its read-only terminal in place of the chat.
         // openTerminal lives in the cockpit IIFE (window.__cockpit); it flips to
         // Radio mode and reveals the takeover panel anchored in .message-area.
@@ -1591,6 +1708,16 @@ export function getDashboardHTML(
         btn.textContent = "kick";
         btn.onclick = () => kick(u);
         li.appendChild(info);
+        // F1: per-agent Compact — only for an ONLINE agent (a live tmux session to
+        // type /compact into); a dimmed/offline row has no session to target.
+        if (online) {
+          const compactBtn = document.createElement("button");
+          compactBtn.className = "compact-btn";
+          compactBtn.textContent = "compact";
+          compactBtn.title = "Send /compact to " + u + " — compacts that agent's context";
+          compactBtn.onclick = (e) => { e.stopPropagation(); compactAgent(u); };
+          li.appendChild(compactBtn);
+        }
         li.appendChild(btn);
         userListEl.appendChild(li);
       }
@@ -1608,7 +1735,7 @@ export function getDashboardHTML(
         const info = document.createElement("span");
         info.className = "agent-info";
         const isOnline = users.has(agent.name) && users.get(agent.name);
-        info.innerHTML = '<span class="agent-dot ' + (isOnline ? 'online' : 'offline') + '"></span><span class="agent-name">' + agent.name + '</span>';
+        info.innerHTML = '<span class="agent-dot ' + (isOnline ? 'online' : 'offline') + '"></span><span class="agent-name">' + escapeHtml(agent.name) + '</span>';
         const actions = document.createElement("span");
         actions.className = "agent-actions";
         const launchBtn = document.createElement("button");
@@ -1685,10 +1812,21 @@ export function getDashboardHTML(
         const li = document.createElement("li");
         const unread = unreadCounts[name] || 0;
         const unreadBadge = unread > 0 ? '<span class="channel-unread">' + unread + '</span>' : '';
-        if (name === "#all") {
-          li.innerHTML = '<span class="channel-name">' + name + '</span>' + unreadBadge;
-        } else {
-          li.innerHTML = '<span class="channel-name">' + name + '</span>' + unreadBadge + '<button class="channel-del">x</button>';
+        // #all is the only unrenamable channel; the other reserved system channels
+        // stay undeletable but ARE renamable. Custom channels get both controls.
+        // (Server hard-guards both boundaries too — these are just the UI affordances.)
+        const isAll = name === "#all";
+        const isReserved = RESERVED_CHANNELS.indexOf(name) !== -1;
+        const renameBtn = isAll ? '' : '<button class="channel-rename" title="Rename channel">&#9998;</button>';
+        const delBtn = isReserved ? '' : '<button class="channel-del" title="Delete channel">x</button>';
+        li.innerHTML = '<span class="channel-name">' + escapeHtml(name) + '</span>' + unreadBadge + renameBtn + delBtn;
+        if (!isAll) {
+          li.querySelector(".channel-rename").onclick = (e) => {
+            e.stopPropagation();
+            renameChannelPrompt(name);
+          };
+        }
+        if (!isReserved) {
           li.querySelector(".channel-del").onclick = (e) => {
             e.stopPropagation();
             if (confirm("Delete " + name + "?")) deleteChannel(name);
@@ -1709,6 +1847,60 @@ export function getDashboardHTML(
       delete unreadCounts[channel];
       renderChannels();
     }
+
+    // Item 1 (fleet_dm): operator-only Direct Messages pane. Read-only audit view,
+    // kept entirely separate from the channel chat (DMs never interleave with channels).
+    const dmListEl = document.getElementById("dm-list");
+    const dmModalEl = document.getElementById("dm-modal");
+    const dmModalTitleEl = document.getElementById("dm-modal-title");
+    const dmModalBodyEl = document.getElementById("dm-modal-body");
+    let dmModalOpenPair = null;
+
+    function renderDmThreads() {
+      fetch("/admin-dms", { headers: adminHeaders })
+        .then(r => r.ok ? r.json() : { threads: [] })
+        .then(data => {
+          dmListEl.innerHTML = "";
+          for (const t of (data.threads || [])) {
+            const li = document.createElement("li");
+            li.innerHTML = '<span class="dm-pair">' + escapeHtml(t.a) + ' ↔ ' + escapeHtml(t.b) + '</span>' +
+              '<span class="dm-count">' + t.count + '</span>';
+            li.title = (t.last_from ? escapeHtml(t.last_from) + ': ' : '') + escapeHtml(t.last_content || '');
+            li.onclick = () => openDmThread(t.pair, t.a + ' ↔ ' + t.b);
+            dmListEl.appendChild(li);
+          }
+        }).catch(() => {});
+    }
+
+    function dmLineHtml(from, to, timestamp, content) {
+      return '<span class="dm-from">' + escapeHtml(from) + '</span>' +
+        '<span class="dm-arrow">→</span><span class="dm-to">' + escapeHtml(to) + '</span>' +
+        '<span class="dm-time">' + formatTime(timestamp) + '</span>' +
+        '<div class="dm-content">' + escapeHtml(content) + '</div>';
+    }
+
+    function openDmThread(pair, label) {
+      dmModalOpenPair = pair;
+      dmModalTitleEl.textContent = label;
+      dmModalBodyEl.innerHTML = '<div class="dm-loading">Loading…</div>';
+      dmModalEl.hidden = false;
+      fetch("/admin-dm-history?pair=" + encodeURIComponent(pair), { headers: adminHeaders })
+        .then(r => r.ok ? r.json() : { messages: [] })
+        .then(data => {
+          const msgs = data.messages || [];
+          dmModalBodyEl.innerHTML = "";
+          for (const m of msgs) {
+            const row = document.createElement("div");
+            row.className = "dm-line";
+            row.innerHTML = dmLineHtml(m.from, m.to, m.timestamp, m.content);
+            dmModalBodyEl.appendChild(row);
+          }
+          if (!msgs.length) dmModalBodyEl.innerHTML = '<div class="dm-loading">No messages.</div>';
+          dmModalBodyEl.scrollTop = dmModalBodyEl.scrollHeight;
+        }).catch(() => { dmModalBodyEl.innerHTML = '<div class="dm-loading">Failed to load.</div>'; });
+    }
+
+    function closeDmModal() { dmModalEl.hidden = true; dmModalOpenPair = null; }
 
     function selectChannel(name) {
       // Picking a channel exits any open terminal takeover and restores that
@@ -1818,9 +2010,9 @@ export function getDashboardHTML(
     }
 
     function buildMessageRow(msg) {
-      const cls = msg.from === OPERATOR_NAME ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
+      const cls = msg.from === "Operator" ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
       const channel = msg.channel || "#all";
-      const channelTag = '<span class="channel-tag">' + channel + '</span>';
+      const channelTag = '<span class="channel-tag">' + escapeHtml(channel) + '</span>';
       const div = document.createElement("div");
       div.className = "msg " + cls;
       div.dataset.channel = channel;
@@ -1829,8 +2021,8 @@ export function getDashboardHTML(
       div.innerHTML =
         '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
         channelTag +
-        '<span class="from">' + msg.from + '</span> ' +
-        '<span class="to">&rarr; ' + msg.to + '</span>' +
+        '<span class="from">' + escapeHtml(msg.from) + '</span> ' +
+        '<span class="to">&rarr; ' + escapeHtml(msg.to) + '</span>' +
         '<div class="content">' + msg.content.replace(/</g, "&lt;") + '</div>' +
         renderImageTag(msg.image);
       if (selectedChannel && channel !== selectedChannel) {
@@ -1886,21 +2078,70 @@ export function getDashboardHTML(
         });
     }
 
-    document.getElementById("stop-all").onclick = () => {
-      fetch("/kick-all", { method: "POST", headers: adminHeaders });
-    };
+    // H1: Kick-all is a destructive bulk disconnect — guard it with a 2-step inline
+    // confirm (no modal). First tap ARMS it with explicit copy + a live roster count +
+    // a visible countdown; a 2nd tap within the window fires; Esc or an outside tap
+    // cancels; it auto-disarms on timeout. The count is the numeric roster size, never
+    // a name — no interpolated identifier, no injection surface.
+    (function () {
+      var kickBtn = document.getElementById("stop-all");
+      if (!kickBtn) return;
+      var origHTML = kickBtn.innerHTML, armed = false, timer = null;
+      function kickableCount() {
+        // /kick-all disconnects REGISTERED (on-air) users, not configured-but-offline agents,
+        // so count #user-list (On Air) — keeps "Kick all N?" honest about what actually dies.
+        var l = document.getElementById("user-list");
+        return l ? l.querySelectorAll("li").length : 0;
+      }
+      function disarm() {
+        if (timer) { clearInterval(timer); timer = null; }
+        armed = false;
+        kickBtn.classList.remove("armed");
+        kickBtn.innerHTML = origHTML;
+        document.removeEventListener("keydown", onKey, true);
+        document.removeEventListener("click", onOutside, true);
+      }
+      function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); disarm(); } }
+      function onOutside(e) { if (e.target !== kickBtn && !kickBtn.contains(e.target)) disarm(); }
+      function arm() {
+        armed = true;
+        kickBtn.classList.add("armed");
+        var left = 5;
+        var paint = function () {
+          kickBtn.textContent = "Kick all " + kickableCount() + "? · " + left + "s · tap again · Esc cancels";
+        };
+        paint();
+        timer = setInterval(function () { left -= 1; if (left <= 0) { disarm(); } else { paint(); } }, 1000);
+        document.addEventListener("keydown", onKey, true);
+        // defer so the arming click itself doesn't immediately trip the outside-cancel
+        setTimeout(function () { document.addEventListener("click", onOutside, true); }, 0);
+      }
+      function fire() {
+        disarm();
+        kickBtn.disabled = true;
+        kickBtn.textContent = "Kicking…";
+        fetch("/kick-all", { method: "POST", headers: adminHeaders })
+          .catch(function () {})
+          .then(function () { setTimeout(function () { kickBtn.disabled = false; kickBtn.innerHTML = origHTML; }, 1500); });
+      }
+      kickBtn.addEventListener("click", function (e) {
+        if (kickBtn.disabled) return;
+        e.stopPropagation();
+        if (armed) { fire(); } else { arm(); }
+      });
+    })();
 
     const launchRefereeBtn = document.getElementById("launch-referee");
     if (launchRefereeBtn) {
       launchRefereeBtn.onclick = () => {
         launchRefereeBtn.disabled = true;
-        const orig = launchRefereeBtn.textContent;
+        const orig = launchRefereeBtn.innerHTML;
         launchRefereeBtn.textContent = "Referee launching…";
         fetch("/admin-launch-referee", { method: "POST", headers: adminHeaders })
           .then(r => r.json().catch(() => ({})))
           .then(data => { if (data && data.error) alert(data.error); })
           .catch(() => {})
-          .then(() => { setTimeout(() => { launchRefereeBtn.disabled = false; launchRefereeBtn.textContent = orig; }, 4000); });
+          .then(() => { setTimeout(() => { launchRefereeBtn.disabled = false; launchRefereeBtn.innerHTML = orig; }, 4000); });
       };
     }
 
@@ -2120,7 +2361,7 @@ export function getDashboardHTML(
         if (targetName === "all") {
           const chInfo = channels.get(channel);
           const memberSet = (channel !== "#all" && chInfo) ? new Set(chInfo.members) : null;
-          for (const [u] of users) { if (u !== OPERATOR_NAME && (!memberSet || memberSet.has(u))) expectReply(u); }
+          for (const [u] of users) { if (u !== "Operator" && (!memberSet || memberSet.has(u))) expectReply(u); }
         } else {
           expectReply(targetName);
         }
@@ -2261,6 +2502,23 @@ export function getDashboardHTML(
         body: JSON.stringify({ name }),
       }).then(r => r.json()).then(data => {
         if (data.error) alert(data.error);
+      }).catch(() => {});
+    }
+
+    // F2: rename a channel. Server re-keys membership + history and hard-guards the
+    // reserved channels (those have no rename button anyway). The "to" is sent without
+    // a leading # (the server normalizes); no-op on cancel or an unchanged name.
+    function renameChannelPrompt(name) {
+      const next = prompt("Rename " + name + " to (without #):", name.replace(/^#/, ""));
+      if (next === null) return;
+      const to = next.trim();
+      if (!to || ("#" + to) === name) return;
+      fetch("/admin-channel-rename", {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ from: name, to }),
+      }).then(r => r.json()).then(data => {
+        if (data && data.error) alert(data.error);
       }).catch(() => {});
     }
 
@@ -2619,6 +2877,11 @@ export function getDashboardHTML(
     // Load agent configs
     refreshAgentConfigs();
 
+    // Item 1 (fleet_dm): load the operator DM audit pane + wire the modal close.
+    renderDmThreads();
+    document.getElementById("dm-modal-close").onclick = closeDmModal;
+    dmModalEl.addEventListener("click", (e) => { if (e.target === dmModalEl) closeDmModal(); });
+
     // Load unread counts
     fetch("/admin-unread-counts", { headers: { "Authorization": "Bearer " + ADMIN_TOKEN } })
       .then(r => r.json())
@@ -2638,7 +2901,7 @@ export function getDashboardHTML(
         if (data.messages && data.messages.length > 0) {
           clearEmpty();
           for (const msg of data.messages) {
-            const cls = msg.from === OPERATOR_NAME ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
+            const cls = msg.from === "Operator" ? "message operator" : (String(msg.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
             const channelTag = '<span class="channel-tag">' + (msg.channel || "#all") + '</span>';
             addMessage(
               '<span class="time">' + formatTime(msg.timestamp) + '</span>' +
@@ -2681,7 +2944,7 @@ export function getDashboardHTML(
         setBoardOnline(ev.name, true);
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.name + '</strong> joined the channel',
+          '<strong>' + escapeHtml(ev.name) + '</strong> joined the channel',
           "system",
           null
         );
@@ -2693,7 +2956,7 @@ export function getDashboardHTML(
         setBoardOnline(ev.name, false);
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.name + '</strong> left the channel',
+          '<strong>' + escapeHtml(ev.name) + '</strong> left the channel',
           "system leave",
           null
         );
@@ -2703,7 +2966,7 @@ export function getDashboardHTML(
         if (users.has(ev.from)) users.set(ev.from, true);
         const existingTimer = typingUsers.get(ev.from);
         if (existingTimer) { clearTimeout(existingTimer.timeoutId); typingUsers.delete(ev.from); renderUsers(); renderTypingBar(); }
-        const cls = ev.from === OPERATOR_NAME ? "message operator" : (String(ev.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
+        const cls = ev.from === "Operator" ? "message operator" : (String(ev.from || "").trim().toUpperCase().startsWith("REFEREE") ? "message referee" : "message");
         const channelTag = '<span class="channel-tag">' + (ev.channel || "#all") + '</span>';
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
@@ -2729,7 +2992,7 @@ export function getDashboardHTML(
         refreshChannels();
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          'Channel <strong>' + ev.name + '</strong> created',
+          'Channel <strong>' + escapeHtml(ev.name) + '</strong> created',
           "system channel-event",
           null
         );
@@ -2737,7 +3000,7 @@ export function getDashboardHTML(
         refreshChannels();
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.userName + '</strong> joined <strong>' + ev.channel + '</strong>',
+          '<strong>' + escapeHtml(ev.userName) + '</strong> joined <strong>' + escapeHtml(ev.channel) + '</strong>',
           "system channel-event",
           ev.channel
         );
@@ -2745,12 +3008,12 @@ export function getDashboardHTML(
         refreshChannels();
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          '<strong>' + ev.userName + '</strong> left <strong>' + ev.channel + '</strong>',
+          '<strong>' + escapeHtml(ev.userName) + '</strong> left <strong>' + escapeHtml(ev.channel) + '</strong>',
           "system channel-event leave",
           ev.channel
         );
       } else if (ev.type === "read_update") {
-        if (ev.userName === OPERATOR_NAME) {
+        if (ev.userName === "Operator") {
           delete unreadCounts[ev.channel];
           renderChannels();
         }
@@ -2760,10 +3023,31 @@ export function getDashboardHTML(
         refreshChannels();
         addMessage(
           '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
-          'Channel <strong>' + ev.name + '</strong> deleted',
+          'Channel <strong>' + escapeHtml(ev.name) + '</strong> deleted',
           "system channel-event leave",
           null
         );
+      } else if (ev.type === "channel_rename") {
+        if (selectedChannel === ev.from) selectedChannel = ev.to;
+        if (unreadCounts[ev.from] != null) { unreadCounts[ev.to] = unreadCounts[ev.from]; delete unreadCounts[ev.from]; }
+        refreshChannels();
+        addMessage(
+          '<span class="time">' + formatTime(ev.timestamp) + '</span>' +
+          'Channel <strong>' + escapeHtml(ev.from) + '</strong> renamed to <strong>' + escapeHtml(ev.to) + '</strong>',
+          "system channel-event",
+          null
+        );
+      } else if (ev.type === "dm") {
+        // Item 1 (fleet_dm): operator-only. Refresh the thread list; if the matching
+        // thread is open, append the new line live. Never touches the channel chat.
+        renderDmThreads();
+        if (dmModalOpenPair && ev.pair === dmModalOpenPair) {
+          const row = document.createElement("div");
+          row.className = "dm-line";
+          row.innerHTML = dmLineHtml(ev.from, ev.to, ev.timestamp, ev.content);
+          dmModalBodyEl.appendChild(row);
+          dmModalBodyEl.scrollTop = dmModalBodyEl.scrollHeight;
+        }
       } else if (ev.type === "agent_config_create" || ev.type === "agent_config_update") {
         refreshAgentConfigs();
       } else if (ev.type === "agent_config_delete") {
@@ -2855,20 +3139,32 @@ export function getDashboardHTML(
     // Thread the SCOPED cockpit token (A3-a) so the cockpit's operator-control POSTs are
     // Bearer-gated (same token already embedded above for the dashboard script — same page,
     // same blast radius). NOT the raw admin token: that never reaches the browser.
-    ${cockpitScript(cockpitToken)}
+    ${cockpitScript(cockpitToken, "Operator")}
 
-    // Mode switch: Radio (default 3-panel) ↔ Cockpit (task-graph).
+    // Mode switch: Radio (3-panel chat) ↔ Cockpit (task view).
+    // §D DISCOVERABILITY — the actual root cause of "zero difference": the page landed in
+    // RADIO by default, and the cockpit redesign lived behind a button the operator never
+    // clicked. The cockpit URL's only human viewer is the operator (agents run on tool
+    // results, not pixels), so default-landing in Cockpit is correct, not a regression. The
+    // choice persists via localStorage "ck_mode": a deliberate switch to Radio STICKS across
+    // reloads; a first-ever visit (no ck_mode) lands in Cockpit. NOTE: ck_mode is the
+    // viewer's OWN benign pane choice — it is NOT the #1 ck_viewer POV leak (different key,
+    // different meaning); do not conflate or "fix" it away.
     (function () {
       const radioBtn = document.getElementById("mode-radio");
       const cockpitBtn = document.getElementById("mode-cockpit");
-      function setMode(cockpit) {
+      function setMode(cockpit, persist) {
         document.body.classList.toggle("cockpit-mode", cockpit);
         if (radioBtn) radioBtn.classList.toggle("active", !cockpit);
         if (cockpitBtn) cockpitBtn.classList.toggle("active", cockpit);
+        if (persist) { try { localStorage.setItem("ck_mode", cockpit ? "cockpit" : "radio"); } catch (e) {} }
         if (cockpit && window.__cockpit) window.__cockpit.refresh();
       }
-      if (radioBtn) radioBtn.addEventListener("click", () => setMode(false));
-      if (cockpitBtn) cockpitBtn.addEventListener("click", () => setMode(true));
+      if (radioBtn) radioBtn.addEventListener("click", () => setMode(false, true));
+      if (cockpitBtn) cockpitBtn.addEventListener("click", () => setMode(true, true));
+      // Initial landing: persisted choice wins; default (no choice yet) = Cockpit.
+      let saved = null; try { saved = localStorage.getItem("ck_mode"); } catch (e) {}
+      setMode(saved !== "radio", false);
     })();
   </script>
   ${cockpitMarkup()}

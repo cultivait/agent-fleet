@@ -21,7 +21,7 @@
 
 import { spawn as realSpawn } from "node:child_process";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,12 @@ function settingsFile(): string {
 }
 function stateFile(): string {
   return process.env.AF_CONDUCTOR_STATE_FILE || process.env.WT_CONDUCTOR_STATE_FILE || join(configDir(), "conductor-state.json");
+}
+// F1(b): the referee LAUNCHER's stdout/stderr are teed here. Lives in the same state
+// dir operator-control already writes (alongside the conductor pidfile/state/settings) —
+// NOT a hardcoded /var/lib path. Env-overridable so tests redirect it to a temp dir.
+function refereeLaunchLogFile(): string {
+  return process.env.AF_REFEREE_LAUNCH_LOG || process.env.WT_REFEREE_LAUNCH_LOG || join(configDir(), "launch-referee.log");
 }
 
 // Repo root: this module compiles to <repo>/hub/dist/operator-control.js, so the repo
@@ -294,17 +300,90 @@ export function launchReferee(proc: ProcDeps = realProc): LaunchResult {
     env.WT_FLEET_MAX = env.AF_FLEET_MAX; // back-compat: a conductor that still reads the legacy name this version
   }
   const args = [fleetScript(), "up", "--linux", "1", "--windows", "0", "--referee", "--yes", "--term", "tmux"];
-  const child = proc.spawn(nodeBin(), args, { detached: true, stdio: "ignore", env });
-  // F1(b) DE-SILENCE: a detached + stdio:"ignore" spawn swallows failures (bad node, missing tmux),
-  // so a failed launch would be invisible (the operator clicks the button, nothing happens). Surface async
-  // spawn errors to the hub log; the operator's confirmation channel is the roster (a referee that
-  // never joins ~45s after "launching…" means it failed).
+  // F1(b) DE-SILENCE: the prior `stdio:"ignore"` swallowed every failure (bad node, missing
+  // tmux, a fleet.mjs throw) — Operator clicks the button and nothing happens, invisibly. PIPE the
+  // launcher's streams instead. The child is the short-lived `fleet up` LAUNCHER (it spawns the
+  // referee into tmux and exits in ~30–45s), so it never outlives the hub — piping to us is safe.
+  const child = proc.spawn(nodeBin(), args, { detached: true, stdio: ["ignore", "pipe", "pipe"], env });
+  // Existing contract: surface async spawn errors (e.g. ENOENT on a bad node bin) to the hub log.
   child.on("error", (e) => console.error(`[operator-control] launch-referee spawn error: ${(e as Error).message}`));
   if (typeof child.pid !== "number") {
     return { ok: false, message: "launch-referee failed: spawn produced no pid" };
   }
+  // Tee the launcher's stdout/stderr to the launch log, and echo a stderr tail to the hub log on
+  // a non-zero exit. Fully async (event listeners) — it never blocks the response below.
+  teeRefereeLaunchOutput(child);
   child.unref();
   return { ok: true, message: "Referee launching… (joins the hub in ~30–45s; watch the roster)" };
+}
+
+// Item 3 (+Referee dialog): spawn N generic BUILDER sessions via the same fleet.mjs lane as
+// the referee, but WITHOUT --referee (no admin carve-out — builders are least-privilege).
+// The count is numeric (injection-safe) and is the ONLY varying argv token; channel/loop are
+// NOT passed on the command line — they live in the referee-launch spec the builders' Referee
+// reads back. A count <= 0 is a no-op. sid-leak protection is unchanged: fleet.mjs's per-pane
+// positive env allowlist strips CLAUDE_CODE_SESSION_ID regardless of how the env was inherited.
+export function launchBuilders(count: number, proc: ProcDeps = realProc): LaunchResult {
+  const n = Math.floor(count);
+  if (!Number.isFinite(n) || n <= 0) {
+    return { ok: true, message: "No builders requested." };
+  }
+  const settings = readSettings();
+  const env = { ...process.env };
+  if (settings.fleetMax != null) {
+    env.AF_FLEET_MAX = String(settings.fleetMax);
+    env.WT_FLEET_MAX = env.AF_FLEET_MAX;
+  }
+  const args = [fleetScript(), "up", "--linux", String(n), "--windows", "0", "--yes", "--term", "tmux"];
+  const child = proc.spawn(nodeBin(), args, { detached: true, stdio: ["ignore", "pipe", "pipe"], env });
+  child.on("error", (e) => console.error(`[operator-control] launch-builders spawn error: ${(e as Error).message}`));
+  if (typeof child.pid !== "number") {
+    return { ok: false, message: "launch-builders failed: spawn produced no pid" };
+  }
+  teeRefereeLaunchOutput(child); // reuse the launcher's stdout/stderr → launch-log tee
+  child.unref();
+  return { ok: true, message: `Launching ${n} builder${n === 1 ? "" : "s"}…` };
+}
+
+const STDERR_TAIL_MAX = 4000; // chars of stderr echoed to the hub log on a failed launcher exit
+
+// Tee a detached referee-launcher's stdout/stderr to the launch log, and on a NON-ZERO exit echo a
+// stderr tail to the hub log so a silent failure becomes visible. Fully async + best-effort: it
+// never throws into the request path and never blocks the response. If neither stream is piped
+// (e.g. a stdio:"ignore" caller or a test fake with no streams) it is a no-op.
+function teeRefereeLaunchOutput(child: ChildProcess): void {
+  if (!child.stdout && !child.stderr) return; // nothing piped → nothing to tee
+  let logStream: WriteStream | null = null;
+  try {
+    const logPath = refereeLaunchLogFile();
+    mkdirSync(dirname(logPath), { recursive: true });
+    logStream = createWriteStream(logPath, { flags: "a" }); // append: launches accumulate
+    logStream.on("error", () => { /* disk full / perms — logging is best-effort, never crash the hub */ });
+    logStream.write(`\n[launch-referee ts=${nowStamp()}] pid=${child.pid}\n`);
+  } catch {
+    logStream = null;
+  }
+  let stderrTail = "";
+  child.stdout?.on("data", (chunk: Buffer) => logStream?.write(chunk));
+  child.stderr?.on("data", (chunk: Buffer) => {
+    logStream?.write(chunk);
+    stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_MAX);
+  });
+  // "close" (NOT "exit"): "exit" can fire before the child's stdout/stderr pipes finish draining,
+  // which would end() the log mid-flush and truncate the final buffered stdout — the launcher's
+  // verdict line, the exact diagnostic tail this tee exists to capture. "close" fires only after all
+  // stdio streams have ended, so every data handler above has already written before we end().
+  child.on("close", (code, signal) => {
+    logStream?.end();
+    if (code !== 0) {
+      const why = signal ? `signal ${signal}` : `exit ${code}`;
+      const tail = stderrTail.trim();
+      console.error(
+        `[operator-control] launch-referee child ${why}` +
+          (tail ? `; stderr tail:\n${tail}` : " (no stderr captured)"),
+      );
+    }
+  });
 }
 
 // ── conductor lifecycle (pidfile singleton, stale-safe) ──

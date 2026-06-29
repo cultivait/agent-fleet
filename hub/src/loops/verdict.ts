@@ -43,6 +43,17 @@ export interface EvaluatorOptimizerConfig {
   plateau?: { window: number; epsilon: number };
 }
 
+// Item 2 (loop-goal): the Referee-proposed, operator-approved acceptance bundle for a
+// goal-driven loop. The qualitative `rubric` is how the Referee-as-judge scores each wave;
+// completeness_target/plateau are the numeric guardrails (mirrored into
+// config.evaluator_optimizer on approval so this verdict engine trips on them). Defined in
+// this acyclic leaf so both store.ts and approvals.ts can reference it without a cycle.
+export interface AcceptanceCriteria {
+  rubric: string;
+  completeness_target?: number;
+  plateau?: { window: number; epsilon: number };
+}
+
 const STATUSES: VerdictStatus[] = ["complete", "partial", "incomplete"];
 const RECOMMENDATIONS: VerdictRecommendation[] = ["accept", "retry", "escalate"];
 

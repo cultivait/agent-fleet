@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMcpServer } from "../tools.js";
 
-// The 45 canonical fleet verbs (alias-transition: each also registered under
+// The 49 canonical fleet verbs (alias-transition: each also registered under
 // its radio_* counterpart, sharing the identical schema + handler).
 const FLEET_NAMES = [
   "fleet_join",
@@ -9,6 +9,7 @@ const FLEET_NAMES = [
   "fleet_claim_referee",
   "fleet_send",
   "fleet_over",
+  "fleet_dm",
   "fleet_send_image",
   "fleet_check",
   "fleet_standby",
@@ -49,6 +50,9 @@ const FLEET_NAMES = [
   "fleet_loop_get",
   "fleet_loop_list",
   "fleet_loop_admin_stop",
+  "fleet_loop_admin_create_draft",
+  "fleet_loop_bind",
+  "fleet_referee_spec",
 ];
 
 describe("createMcpServer tool registration (alias-transition)", () => {
@@ -56,13 +60,13 @@ describe("createMcpServer tool registration (alias-transition)", () => {
   const reg = (server as unknown as { _registeredTools: Record<string, { callback: unknown }> })._registeredTools;
   const names = Object.keys(reg);
 
-  it("registers all 45 canonical fleet_* tools", () => {
+  it("registers all 49 canonical fleet_* tools", () => {
     for (const fleetName of FLEET_NAMES) {
       expect(names, `missing canonical tool ${fleetName}`).toContain(fleetName);
     }
   });
 
-  it("registers all 45 deprecated radio_* aliases", () => {
+  it("registers all 49 deprecated radio_* aliases", () => {
     for (const fleetName of FLEET_NAMES) {
       const radioName = `radio_${fleetName.slice("fleet_".length)}`;
       expect(names, `missing radio alias ${radioName}`).toContain(radioName);
@@ -78,7 +82,7 @@ describe("createMcpServer tool registration (alias-transition)", () => {
     }
   });
 
-  it("registers exactly 90 tools total (45 fleet × 2)", () => {
-    expect(names.length).toBe(90);
+  it("registers exactly 98 tools total (49 fleet × 2)", () => {
+    expect(names.length).toBe(98);
   });
 });

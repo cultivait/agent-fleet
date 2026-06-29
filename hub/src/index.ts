@@ -5,7 +5,7 @@ import { initGeneralChannel } from "./channels.js";
 import { initDB } from "./db.js";
 import { closeAllSSEClients } from "./events.js";
 import { autoLaunchAgents } from "./launcher.js";
-import { closeAllPolls } from "./polling.js";
+import { closeAllPolls, reconcilePresenceFromRegistry } from "./polling.js";
 import { enqueueAndDeliver, ensureQueue } from "./router.js";
 import { createHubServer, ensureOperatorPresence } from "./server.js";
 
@@ -37,7 +37,18 @@ initGeneralChannel();
 
 const server = createHubServer(port, adminToken, joinToken);
 
-// Persistent operator presence: register the operator so `fleet_send to:@operator` always
+// Startup reconcile pass (B3 offline-sweep + B4 dup-row reconcile): on an unclean
+// reboot the in-memory presence set is empty, so every persisted registry callsign
+// would read ONLINE (dead seats included) and wedge vacancy checks — e.g. a dead
+// REFEREE row pinning fleet_claim_referee at 409 forever. Baseline every persisted
+// callsign OFFLINE (dead until it re-polls), and signed_off the stale null-handle
+// duplicate rows become_referee's in-memory-only shed leaves behind (only when a
+// live-handle sibling proves the seat is still up). Runs AFTER createHubServer
+// (handlePoll can reclaim a live seat on the next poll) and BEFORE ensureOperatorPresence
+// (which re-asserts the persistent operator online — it is intentionally exempt from the sweep).
+reconcilePresenceFromRegistry();
+
+// Persistent operator presence: register "Operator" so `fleet_send to:@Operator` always
 // resolves, messages addressed to him queue (and survive restart via rehydration),
 // and the ghost-reaper / kick-all never sweep him. Bootstrapped in the production
 // entrypoint (NOT inside createHubServer) so the test harness, which drives
